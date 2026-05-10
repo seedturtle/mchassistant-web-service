@@ -165,7 +165,7 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
         user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
         
         payload = json.dumps({
-            "model": "MiniMax-Text-01",
+            "model": "minimax-m2.7",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
