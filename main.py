@@ -134,8 +134,10 @@ def transcribe_audio(audio_bytes: bytes) -> str:
 
 def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
     """Use MiniMax API to summarize and organize transcribed text into a professional report"""
+    logging.info(f"[summarize_with_hermes] Called with report_type={report_type}, text_length={len(transcribed_text)}")
     if not MINIMAX_API_KEY:
         # If no API key, return original text
+        logging.warning("[summarize_with_hermes] No API key, returning original text")
         return transcribed_text
     
     try:
@@ -671,9 +673,13 @@ async def generate_report(session_id: str, request: Request, req: dict):
     ])
     
     # Summarize with MiniMax AI if API key is available
+    logging.info(f"[Generate] MINIMAX_API_KEY set: {bool(MINIMAX_API_KEY)}, length: {len(MINIMAX_API_KEY) if MINIMAX_API_KEY else 0}")
     if MINIMAX_API_KEY:
+        logging.info(f"[Generate] Calling MiniMax API...")
         summarized_text = summarize_with_hermes(full_text, report_type)
+        logging.info(f"[Generate] MiniMax returned {len(summarized_text)} chars")
     else:
+        logging.warning("[Generate] MINIMAX_API_KEY is empty - skipping AI summarization")
         summarized_text = full_text  # Fallback to original
     
     # If template exists, fill it
