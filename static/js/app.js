@@ -18,37 +18,145 @@ const downloadBtn = document.getElementById('downloadBtn');
 const emailBtn = document.getElementById('emailBtn');
 const templateFile = document.getElementById('templateFile');
 const templateStatus = document.getElementById('templateStatus');
+const templateList = document.getElementById('templateList');
+const uploadTemplateBtn = document.getElementById('uploadTemplateBtn');
 const reportType = document.getElementById('reportType');
 const result = document.getElementById('result');
 
-// Template Upload
-if (templateFile) {
-    templateFile.addEventListener('change', async () => {
-        if (templateFile.files.length > 0) {
-            const file = templateFile.files[0];
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('session_id', SESSION_ID);
-            
+let selectedTemplate = null;
+
+// Load saved templates
+async function loadTemplates() {
+    try {
+        const res = await fetch('/api/templates');
+        const data = await res.json();
+        if (data.success) {
+            renderTemplates(data.templates);
+        }
+    } catch (e) {
+        console.error('Failed to load templates:', e);
+    }
+}
+
+function renderTemplates(templates) {
+    if (!templateList) return;
+    if (templates.length === 0) {
+        templateList.innerHTML = '<div class="template-empty">尚未上傳任何模板</div>';
+        return;
+    }
+    templateList.innerHTML = templates.map(t => 
+        `<div class="template-item${selectedTemplate === t.name ? ' active' : ''}" data-name="${t.name}">
+            <span class="name">📄 ${t.name}</span>
+            <button class="delete-btn" data-name="${t.name}" title="刪除模板">✕</button>
+        </div>`
+    ).join('');
+    
+    templateList.querySelectorAll('.template-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if (e.target.classList.contains('delete-btn')) return;
+            selectTemplate(el.dataset.name);
+        });
+    });
+    
+    templateList.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const name = btn.dataset.name;
+            if (!confirm(`刪除模板「${name}」？`)) return;
             try {
-                const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
-                    method: 'POST',
-                    body: formData
+                const res = await fetch('/api/templates/' + encodeURIComponent(name), {
+                    method: 'DELETE'
                 });
                 const data = await res.json();
                 if (data.success) {
-                    hasTemplate = true;
-                    templateStatus.innerHTML = '<span class="success">✓ 已上傳：' + file.name + '</span>';
-                    checkGenerateReady();
-                } else {
-                    templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
+                    if (selectedTemplate === name) {
+                        selectedTemplate = null;
+                        hasTemplate = false;
+                        templateStatus.innerHTML = '';
+                    }
+                    await loadTemplates();
                 }
             } catch (e) {
-                templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
+                alert('刪除失敗：' + e.message);
             }
-        }
+        });
     });
 }
+
+async function selectTemplate(name) {
+    try {
+        const res = await fetch('/api/sessions/' + SESSION_ID + '/template/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ template_name: name })
+        });
+        const data = await res.json();
+        if (data.success) {
+            selectedTemplate = name;
+            hasTemplate = true;
+            templateStatus.innerHTML = '<span class="success">✓ 已選取：' + name + '</span>';
+            checkGenerateReady();
+        } else {
+            templateStatus.innerHTML = '<span class="error">選取失敗</span>';
+        }
+    } catch (e) {
+        templateStatus.innerHTML = '<span class="error">選取失敗：' + e.message + '</span>';
+    }
+    renderTemplates(await fetchSavedTemplates());
+}
+
+async function fetchSavedTemplates() {
+    try {
+        const res = await fetch('/api/templates');
+        const data = await res.json();
+        if (data.success) return data.templates;
+    } catch(e) {}
+    return [];
+}
+
+// Template upload
+if (templateFile && uploadTemplateBtn) {
+    templateFile.addEventListener('change', () => {
+        uploadTemplateBtn.disabled = templateFile.files.length === 0;
+    });
+    
+    uploadTemplateBtn.addEventListener('click', async () => {
+        if (templateFile.files.length === 0) return;
+        const file = templateFile.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('session_id', SESSION_ID);
+        
+        uploadTemplateBtn.textContent = '上傳中...';
+        uploadTemplateBtn.disabled = true;
+        
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (data.success) {
+                selectedTemplate = data.filename;
+                hasTemplate = true;
+                templateStatus.innerHTML = '<span class="success">✓ 已上傳並選取：' + data.filename + '</span>';
+                templateFile.value = '';
+                uploadTemplateBtn.disabled = true;
+                checkGenerateReady();
+                await loadTemplates();
+            } else {
+                templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
+            }
+        } catch (e) {
+            templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
+        }
+        uploadTemplateBtn.textContent = '上傳';
+        uploadTemplateBtn.disabled = templateFile.files.length === 0;
+    });
+}
+
+// Load templates on startup
+loadTemplates();
 
 // Recording Control
 if (recordBtn) {
