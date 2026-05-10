@@ -534,12 +534,9 @@ async def add_segment(session_id: str, req: AudioSegmentRequest, request: Reques
         return transcribe_audio(audio_bytes)
     
     try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        future = loop.run_in_executor(executor, do_transcribe)
-        text = loop.run_until_complete(asyncio.wait_for(future, timeout=120))
-    except asyncio.TimeoutError:
+        future = executor.submit(do_transcribe)
+        text = future.result(timeout=120)
+    except concurrent.futures.TimeoutError:
         text = "[轉換失敗: 逾時]"
     except Exception as e:
         text = f"[轉換失敗: {str(e)}]"
