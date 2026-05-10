@@ -449,9 +449,10 @@ async def dashboard(request: Request):
         
         <div class="card">
             <h3>📄 Word 模板</h3>
-            <p class="hint">上傳一次即永久留存在伺服器（再次上傳會覆蓋舊的）。使用 {{content}}、{{date}}、{{report_type}} 作為佔位符</p>
-            <input type="file" id="templateFile" accept=".docx" class="file-input">
+            <p class="hint">使用 {{content}}、{{date}}、{{report_type}} 作為佔位符</p>
             <div id="templateStatus" class="template-status"></div>
+            <input type="file" id="templateFile" accept=".docx" class="file-input">
+            <p class="hint" id="templateOverwriteHint" style="display:none; margin-top:4px;">上傳新模板將會覆蓋現有模板</p>
         </div>
         
         <div class="card recorder-card">
@@ -492,10 +493,31 @@ async def dashboard(request: Request):
     const emailBtn = document.getElementById('emailBtn');
     const templateFile = document.getElementById('templateFile');
     const templateStatus = document.getElementById('templateStatus');
+    const templateOverwriteHint = document.getElementById('templateOverwriteHint');
     const reportType = document.getElementById('reportType');
     const result = document.getElementById('result');
     
-    // Template upload — 上傳即永久儲存，再次上傳會覆蓋
+    // Load template status on page load
+    async function loadTemplateStatus() {
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/template');
+            const data = await res.json();
+            if (data.success && data.has_template) {
+                hasTemplate = true;
+                templateStatus.innerHTML = '<span class="success">✓ 目前模板：' + data.filename + '</span>';
+                templateOverwriteHint.style.display = 'block';
+            } else {
+                hasTemplate = false;
+                templateStatus.innerHTML = '<span class="hint">目前無模板，可以上傳模板</span>';
+                templateOverwriteHint.style.display = 'none';
+            }
+        } catch (e) {
+            templateStatus.innerHTML = '<span class="hint">目前無模板，可以上傳模板</span>';
+        }
+    }
+    loadTemplateStatus();
+    
+    // Template upload — upload once, persists on server, re-upload overwrites
     templateFile.onchange = async () => {
         if (templateFile.files.length > 0) {
             const file = templateFile.files[0];
@@ -512,6 +534,7 @@ async def dashboard(request: Request):
                 if (data.success) {
                     hasTemplate = true;
                     templateStatus.innerHTML = '<span class="success">✓ 已儲存：' + data.filename + '</span>';
+                    templateOverwriteHint.style.display = 'block';
                 } else {
                     templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
                 }
@@ -673,6 +696,17 @@ async def new_session(request: Request):
 # =============================================================================
 # API Endpoints
 # =============================================================================
+
+@app.get("/api/sessions/{session_id}/template")
+async def get_template_status(session_id: str, request: Request):
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    template_path = TEMPLATES_DIR / "template.docx"
+    if template_path.exists():
+        return {"success": True, "has_template": True, "filename": "template.docx"}
+    else:
+        return {"success": True, "has_template": False}
 
 @app.post("/api/sessions/{session_id}/template")
 async def upload_template(session_id: str, request: Request, file: UploadFile = File(...)):
