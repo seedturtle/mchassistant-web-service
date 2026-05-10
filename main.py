@@ -99,20 +99,21 @@ def get_or_create_session() -> str:
     return session_id
 
 def transcribe_audio(audio_bytes: bytes) -> str:
-    """Transcribe audio using Whisper (local)"""
+    """Transcribe audio using Faster Whisper (local)"""
     try:
-        import whisper
-        model = whisper.load_model("base")
+        from faster_whisper import WhisperModel
+        model = WhisperModel("base", device="cpu", compute_type="int8")
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             f.write(audio_bytes)
             temp_path = f.name
         try:
-            result = model.transcribe(temp_path, language="zh")
-            return result["text"].strip()
+            segments, info = model.transcribe(temp_path, language="zh")
+            text = "".join([s.text for s in segments]).strip()
+            return text if text else "[無辨識結果]"
         finally:
             os.unlink(temp_path)
     except Exception as e:
-        logging.error(f"Whisper transcription error: {e}")
+        logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
 def fill_template(template_path: str, segments: list, report_type: str) -> bytes:
