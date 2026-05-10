@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from docx import Document
 
@@ -606,7 +607,7 @@ async def download_report(session_id: str, request: Request):
             content=session["generated_docx"],
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             headers={
-                "Content-Disposition": f"attachment; filename=MCH_報告_{datetime.now().strftime('%Y%m%d')}.docx"
+                "Content-Disposition": f"attachment; filename*=UTF-8''MCH_%E5%A0%B1%E5%91%8A_{datetime.now().strftime('%Y%m%d')}.docx"
             }
         )
     elif session["segments"]:
@@ -619,7 +620,7 @@ async def download_report(session_id: str, request: Request):
             content=full_text,
             media_type="text/plain; charset=utf-8",
             headers={
-                "Content-Disposition": f"attachment; filename=MCH_報告_{datetime.now().strftime('%Y%m%d')}.txt"
+                "Content-Disposition": f"attachment; filename*=UTF-8''MCH_%E5%A0%B1%E5%91%8A_{datetime.now().strftime('%Y%m%d')}.txt"
             }
         )
     else:
