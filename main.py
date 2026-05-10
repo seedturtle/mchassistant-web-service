@@ -471,7 +471,6 @@ async def dashboard(request: Request):
     const templateStatus = document.getElementById('templateStatus');
     const reportType = document.getElementById('reportType');
     const result = document.getElementById('result');
-    let hasTemplate = false;
     
     // Template upload — 上傳即永久儲存，再次上傳會覆蓋
     templateFile.onchange = async () => {
