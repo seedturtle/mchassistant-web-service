@@ -6,6 +6,7 @@ let isRecording = false;
 let segments = [];
 let hasTemplate = false;
 let SESSION_ID = '';
+let recordingTimer = null;
 
 // DOM Elements
 const recordBtn = document.getElementById('recordBtn');
@@ -89,6 +90,7 @@ if (recordBtn) {
                             alert('錯誤：' + e.message);
                             status.textContent = '錯誤';
                         }
+                        clearInterval(recordingTimer);
                         stream.getTracks().forEach(t => t.stop());
                     };
                 };
@@ -96,7 +98,20 @@ if (recordBtn) {
                 mediaRecorder.start();
                 isRecording = true;
                 recordBtn.textContent = '⏹️';
-                status.textContent = '錄音中... 再次點擊停止';
+                
+                // 5分鐘計時器
+                let remaining = 300;
+                const timerDisplay = setInterval(() => {
+                    remaining--;
+                    const mins = Math.floor(remaining / 60);
+                    const secs = remaining % 60;
+                    status.textContent = `錄音中... 再次點擊停止（還有 ${mins}:${secs.toString().padStart(2, '0')}）`;
+                    if (remaining <= 0) {
+                        mediaRecorder.stop();
+                        clearInterval(timerDisplay);
+                    }
+                }, 1000);
+                recordingTimer = timerDisplay;
             } catch (e) {
                 alert('無法存取麥克風：' + e.message);
             }

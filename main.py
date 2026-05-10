@@ -537,7 +537,7 @@ async def add_segment(session_id: str, req: AudioSegmentRequest, request: Reques
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        text = loop.run_in_executor(executor, do_transcribe).result(timeout=120)
+        text = loop.run_in_executor(executor, do_transcribe).result(120)
     except Exception as e:
         text = f"[轉換失敗: {str(e)}]"
     
