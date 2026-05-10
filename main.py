@@ -875,41 +875,47 @@ async def email_report(session_id: str, request: Request, req: EmailRequest):
     
     try:
         import urllib.request
+        import urllib.error
         
         # Build email content
         report_date = datetime.now().strftime('%Y年%m月%d日')
         report_type_name = get_report_type_name(session.get("report_type", "general"))
         
-        # Create email
-        msg = MIMEMultipart()
-        msg['to'] = req.to_email
-        msg['subject'] = f"MCH 報告 - {report_date}"
+        # Try to get summarized text from segments or build a cleaner body
+        # Build a cleaner body using all segments (but without the 【段落】 markers)
+        body_lines = []
+        for i, seg in enumerate(session["segments"]):
+            body_lines.append(f"【記錄 {i+1}】\n{seg['transcription']}")
+        segment_text = "\n\n".join(body_lines)
         
-        # Email body
-        body = f"""
-您好，
+        # Create email
+        msg = MIMEMultipart('mixed')
+        msg['to'] = req.to_email
+        msg['subject'] = f"MCH {report_type_name} - {report_date}"
+        
+        # Email body (brief intro + mention attachment)
+        body = f"""您好，
 
-這是來自 MCH Assistant 的語音報告。
+這是由 MCH Assistant 產生的 {report_type_name}，日期：{report_date}。
 
-報告日期：{report_date}
-報告類型：{report_type_name}
-
---- 錄音內容 ---
-{chr(10).join([f"【段落{i+1}】{seg['transcription']}" for i, seg in enumerate(session['segments'])])}
+彙整報告已作為 Word 檔案 (.docx) 附加於此郵件中，請直接下載開啟。
 
 ---
 此郵件由 MCH Assistant 自動發送
 """
         msg.attach(MIMEText(body, 'plain', 'utf-8'))
         
-        # If we have a generated docx, attach it
+        # Attach the Word docx if available
         if session.get("generated_docx"):
             from email.mime.base import MIMEBase
             from email import encoders
-            part = MIMEBase('application', 'octet-stream')
+            clean_date = report_date.replace("年", "").replace("月", "").replace("日", "")
+            filename = f"MCH_{report_type_name}_{clean_date}.docx"
+            
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
             part.set_payload(session["generated_docx"])
             encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename=MCH_報告_{report_date.replace("年", "").replace("月", "").replace("日", "")}.docx')
+            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
             msg.attach(part)
         
         # Encode to base64url
