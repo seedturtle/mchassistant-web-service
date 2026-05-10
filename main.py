@@ -34,12 +34,12 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 MATON_API_KEY=os.getenv("MATON_API_KEY", "")
 GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
 
-# Hermes AI API (for report summarization)
-HERMES_API_KEY=os.getenv("HERMES_API_KEY", "")
-HERMES_GATEWAY = "https://gateway.maton.ai/hermes/chat/completions"
-
 # HuggingFace token (for Faster Whisper model download)
 HF_TOKEN=os.getenv("HF_TOKEN", "")
+
+# MiniMax API (for report summarization)
+MINIMAX_API_KEY=os.getenv("MINIMAX_API_KEY", "")
+MINIMAX_API_GATEWAY="https://api.minimax.chat/v1/text/chatcompletion_v2"
 
 # Session storage
 # {session_id: {"report_type": str, "template_path": str, "segments": [], "created_at": datetime}}
@@ -133,9 +133,9 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         return f"[轉換失敗: {str(e)}]"
 
 def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
-    """Use HuggingFace Inference API to summarize and organize transcribed text into a professional report"""
-    if not HF_TOKEN:
-        # If no token, return original text
+    """Use MiniMax API to summarize and organize transcribed text into a professional report"""
+    if not MINIMAX_API_KEY:
+        # If no API key, return original text
         return transcribed_text
     
     try:
@@ -163,52 +163,27 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
 
         user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
         
-        # Use HuggingFace Inference API with a chat model
-        # Try mixtral first, fall back to other models
-        models_to_try = [
-            "mistralai/Mixtral-8x7B-Instruct-v0.1",
-            "meta-llama/Llama-2-70b-chat-hf",
-            "microsoft/phi-2"
-        ]
+        payload = json.dumps({
+            "model": "MiniMax-Text-01",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4000
+        }).encode()
         
-        last_error = None
-        for model in models_to_try:
-            try:
-                payload = json.dumps({
-                    "inputs": f"<s>[INST] {system_prompt}\n\n{user_prompt} [/INST]",
-                    "parameters": {
-                        "max_new_tokens": 2000,
-                        "temperature": 0.3,
-                        "return_full_text": False
-                    }
-                }).encode()
-                
-                req = urllib.request.Request(
-                    f"https://api-inference.huggingface.co/models/{model}",
-                    data=payload,
-                    method='POST'
-                )
-                req.add_header('Authorization', f'Bearer {HF_TOKEN}')
-                req.add_header('Content-Type', 'application/json')
-                
-                with urllib.request.urlopen(req, timeout=120) as resp:
-                    result = json.loads(resp.read().decode())
-                    if isinstance(result, list) and len(result) > 0:
-                        return result[0].get('generated_text', '').strip()
-                    elif isinstance(result, dict) and 'generated_text' in result:
-                        return result['generated_text'].strip()
-                
-            except Exception as e:
-                last_error = e
-                continue
+        req = urllib.request.Request(MINIMAX_API_GATEWAY, data=payload, method='POST')
+        req.add_header('Authorization', f'Bearer {MINIMAX_API_KEY}')
+        req.add_header('Content-Type', 'application/json')
         
-        # If all models fail, log and return original
-        if last_error:
-            logging.error(f"All HuggingFace models failed. Last error: {last_error}")
-        return transcribed_text
-        
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode())
+            if 'choices' in result and len(result['choices']) > 0:
+                return result['choices'][0]['message']['content'].strip()
+            return transcribed_text
     except Exception as e:
-        logging.error(f"Hermes summarization error: {e}")
+        logging.error(f"MiniMax summarization error: {e}")
         return transcribed_text  # Fallback to original text if summarization fails
 
 def fill_template(template_path: str, segments: list, report_type: str, summarized_text: str = None) -> bytes:
