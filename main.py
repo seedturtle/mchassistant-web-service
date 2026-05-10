@@ -5,6 +5,7 @@ MCH Assistant Web Service - 門諾醫院AI語音助理
 
 import os
 import io
+import re
 import uuid
 import logging
 import base64
@@ -130,19 +131,23 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
-def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
-    """Use MiniMax API to summarize and organize transcribed text into a professional report"""
-    logging.info(f"[summarize_with_hermes] Called with report_type={report_type}, text_length={len(transcribed_text)}")
+def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None) -> any:
+    """Use MiniMax API to summarize and organize transcribed text into a professional report.
+    
+    If placeholders is provided, returns a dict {field_name: content}.
+    Otherwise returns a plain summarized string.
+    """
+    logging.info(f"[summarize_with_hermes] Called with report_type={report_type}, text_length={len(transcribed_text)}, placeholders={placeholders}")
     if not MINIMAX_API_KEY:
-        # If no API key, return original text
         logging.warning("[summarize_with_hermes] No API key, returning original text")
+        if placeholders:
+            return {p: transcribed_text for p in placeholders}
         return transcribed_text
     
     try:
         import urllib.request
         import urllib.error
         
-        # Build the prompt based on report type
         report_type_names = {
             "general": "一般報告",
             "medical": "醫療報告",
@@ -152,11 +157,24 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
         }
         type_name = report_type_names.get(report_type, "報告")
         
-        system_prompt = """你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。
+        if placeholders:
+            # === 結構化模式：Template has specific fields ===
+            fields_str = "、".join(placeholders)
+            user_prompt = f"""報告類型：{type_name}
 
-報告類型："""
+模板欄位：{fields_str}
 
-        user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
+錄音內容：
+{transcribed_text}
+
+請根據錄音內容，為以上每個模板欄位產生合適的文字內容。
+以 JSON 格式回傳，不要有其他文字。範例：
+{{"{placeholders[0]}": "填寫內容", "{placeholders[-1]}": "填寫內容"}}"""
+            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。"
+        else:
+            # === 自由模式：No specific fields, just summarize ===
+            system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。"
+            user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
         
         payload = json.dumps({
             "model": "minimax-m2.7",
@@ -177,19 +195,45 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
             logging.warning(f"[summarize_with_hermes] MiniMax raw response: {str(result)[:500]}")
             if 'choices' in result and len(result['choices']) > 0:
                 content = result['choices'][0]['message']['content'].strip()
-                logging.warning(f"[summarize_with_hermes] Extracted content: {content[:200]}")
-                return content
-            logging.warning("[summarize_with_hermes] No choices in response, returning original")
+                logging.warning(f"[summarize_with_hermes] Extracted content: {content[:300]}")
+                
+                if placeholders:
+                    # Try to parse as JSON
+                    try:
+                        # Strip markdown code fences if present
+                        clean = content.strip()
+                        if clean.startswith("```"):
+                            clean = clean.split("\n", 1)[1] if "\n" in clean else clean
+                            clean = clean.rsplit("```", 1)[0] if "```" in clean else clean
+                            clean = clean.strip()
+                        fields_result = json.loads(clean)
+                        # Ensure all placeholders have values
+                        for p in placeholders:
+                            if p not in fields_result:
+                                fields_result[p] = f"[待補充：{p}]"
+                        return fields_result
+                    except (json.JSONDecodeError, Exception) as e:
+                        logging.error(f"[summarize_with_hermes] JSON parse error: {e}, content={content[:200]}")
+                        # Fallback: put everything in first placeholder
+                        return {p: content if i == 0 else f"[待補充：{p}]" for i, p in enumerate(placeholders)}
+                else:
+                    return content
+            
+            logging.warning("[summarize_with_hermes] No choices in response")
+            if placeholders:
+                return {p: f"[待補充：{p}]" for p in placeholders}
             return transcribed_text
     except Exception as e:
         logging.error(f"MiniMax summarization error: {e}")
-        return transcribed_text  # Fallback to original text if summarization fails
+        if placeholders:
+            return {p: transcribed_text for p in placeholders}
+        return transcribed_text
 
-def fill_template(template_path: str, segments: list, report_type: str, summarized_text: str = None) -> bytes:
-    """Fill Word template with transcribed text"""
+def fill_template(template_path: str, segments: list, report_type: str, summarized_text: str = None, fields_dict: dict = None) -> bytes:
+    """Fill Word template with transcribed text and structured field data"""
     doc = Document(template_path)
     
-    # Use AI-summarized text if available, otherwise use original transcribed text
+    # Build full text from segments
     if summarized_text:
         full_text = summarized_text
     else:
@@ -201,25 +245,32 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
     report_date = datetime.now().strftime('%Y年%m月%d日')
     report_name = get_report_type_name(report_type)
     
-    # Replace placeholders in paragraphs
-    for para in doc.paragraphs:
-        if "{{content}}" in para.text:
-            para.text = para.text.replace("{{content}}", full_text)
-        if "{{date}}" in para.text:
-            para.text = para.text.replace("{{date}}", report_date)
-        if "{{report_type}}" in para.text:
-            para.text = para.text.replace("{{report_type}}", report_name)
+    def replace_in_element(element):
+        """Replace all placeholders in a text element (paragraph or table cell)"""
+        text = element.text
+        if "{{content}}" in text:
+            text = text.replace("{{content}}", full_text)
+        if "{{date}}" in text:
+            text = text.replace("{{date}}", report_date)
+        if "{{report_type}}" in text:
+            text = text.replace("{{report_type}}", report_name)
+        if fields_dict:
+            for key, value in fields_dict.items():
+                placeholder = f"{{{{{key}}}}}"
+                if placeholder in text:
+                    text = text.replace(placeholder, str(value))
+        if text != element.text:
+            element.text = text
     
-    # Also replace in tables
+    # Replace in paragraphs
+    for para in doc.paragraphs:
+        replace_in_element(para)
+    
+    # Replace in tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                if "{{content}}" in cell.text:
-                    cell.text = cell.text.replace("{{content}}", full_text)
-                if "{{date}}" in cell.text:
-                    cell.text = cell.text.replace("{{date}}", report_date)
-                if "{{report_type}}" in cell.text:
-                    cell.text = cell.text.replace("{{report_type}}", report_name)
+                replace_in_element(cell)
     
     # Save to bytes
     buffer = io.BytesIO()
@@ -235,6 +286,22 @@ def get_report_type_name(report_type: str) -> str:
         "ent": "耳鼻喉科報告"
     }
     return names.get(report_type, report_type)
+
+def extract_placeholders(doc_path: str) -> list:
+    """Scan Word template and extract all {{placeholder}} patterns (except built-in ones)"""
+    doc = Document(doc_path)
+    placeholders = set()
+    for para in doc.paragraphs:
+        found = re.findall(r'\{\{(.*?)\}\}', para.text)
+        placeholders.update(found)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                found = re.findall(r'\{\{(.*?)\}\}', cell.text)
+                placeholders.update(found)
+    # Built-in fields we auto-fill — exclude from dynamic fields
+    auto_fill = {"date", "report_type", "content"}
+    return [p for p in placeholders if p not in auto_fill]
 
 # =============================================================================
 # Pages (HTML)
@@ -682,26 +749,48 @@ async def generate_report(session_id: str, request: Request, req: dict):
         for i, seg in enumerate(session["segments"])
     ])
     
-    # Summarize with MiniMax AI if API key is available
+    # Check if template has specific fields
+    template_path = str(TEMPLATES_DIR / "template.docx")
+    template_fields = []
+    if Path(template_path).exists():
+        try:
+            template_fields = extract_placeholders(template_path)
+            logging.warning(f"[Generate] Template fields found: {template_fields}")
+        except Exception as e:
+            logging.error(f"[Generate] Failed to scan template: {e}")
+    
+    # Summarize with MiniMax AI
     api_key_preview = MINIMAX_API_KEY[:10] + "..." if MINIMAX_API_KEY else "EMPTY"
     logging.warning(f"[Generate] MINIMAX_API_KEY: {api_key_preview}, length: {len(MINIMAX_API_KEY) if MINIMAX_API_KEY else 0}")
+    
+    fields_dict = None
+    summarized_text = None
+    
     if MINIMAX_API_KEY:
-        logging.warning(f"[Generate] Calling MiniMax API...")
-        summarized_text = summarize_with_hermes(full_text, report_type)
-        logging.warning(f"[Generate] MiniMax returned {len(summarized_text)} chars")
+        logging.warning(f"[Generate] Calling MiniMax API with placeholders={template_fields}")
+        result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None)
+        
+        if template_fields:
+            # Structured mode — MiniMax returned a dict
+            fields_dict = result
+            logging.warning(f"[Generate] MiniMax returned fields: {list(fields_dict.keys()) if fields_dict else 'none'}")
+        else:
+            # Free mode — MiniMax returned a string
+            summarized_text = result
+            logging.warning(f"[Generate] MiniMax returned {len(summarized_text)} chars")
     else:
         logging.warning("[Generate] MINIMAX_API_KEY is empty - skipping AI summarization")
-        summarized_text = full_text  # Fallback to original
+        summarized_text = full_text
     
     # If template exists, fill it
-    template_path = str(TEMPLATES_DIR / "template.docx")
     if Path(template_path).exists():
         try:
             docx_bytes = fill_template(
                 template_path,
                 session["segments"],
                 report_type,
-                summarized_text=summarized_text
+                summarized_text=summarized_text,
+                fields_dict=fields_dict
             )
             session["generated_docx"] = docx_bytes
             return {"success": True, "has_template": True}
