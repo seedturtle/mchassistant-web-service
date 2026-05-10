@@ -436,6 +436,17 @@ async def dashboard(request: Request):
         <h1>🎙️ 語音錄製</h1>
         <p class="subtitle">分段錄音，完成後合併產生報告</p>
         
+        <div class="card instructions-card">
+            <h3>📖 使用說明</h3>
+            <ul class="instructions-list">
+                <li>🎤 按下錄音鈕開始錄音，再按一下停止</li>
+                <li>➕ 停止後可繼續錄下一段，段落沒有限制</li>
+                <li>⏳ 請耐心等待所有段落都辨識完畢後，再按下「產生報告」</li>
+                <li>📥 報告產出成功後，可以下載或是以 Email 發送</li>
+                <li>📄 可上傳 Word 模板，AI 彙整內容會自動填入</li>
+            </ul>
+        </div>
+        
         <div class="card">
             <h3>📋 報告類型</h3>
             <select id="reportType" class="select-full">
