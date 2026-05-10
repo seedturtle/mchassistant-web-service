@@ -34,6 +34,8 @@ uvicorn main:app --reload --port 8000
    - `HERMES_API_KEY`: Your Hermes API key
 4. Deploy!
 
+Your service will be available at: **https://mchassistantwebservice.zeabur.app**
+
 ## API Endpoints
 
 - `POST /api/auth/login` - User login

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://github.com/zeabur/zeabur/raw/main/docs/schema.json",
+  "name": "MCH Assistant Web Service",
+  "build": {
+    "method": "docker",
+    "dockerfile": "Dockerfile"
+  },
+  "deploy": {
+    "region": "auto",
+    "port": 8080
+  },
+  "env": {
+    "PORT": "8080"
+  }
+}
