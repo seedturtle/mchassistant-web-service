@@ -9,6 +9,10 @@ import uuid
 import logging
 import base64
 import tempfile
+import json
+import email.message
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -28,6 +32,10 @@ from docx import Document
 ACCESS_PASSWORD = "ABC1234"
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# Maton Gmail API (for sending emails)
+MATON_API_KEY = os.getenv("MATON_API_KEY", "v2.zlcGqf1ftNATtrNkwmXFa8snundIGVsq_5-fzjBn9BArZalW1bk5IiPZgK9TSyu5ADpZ4hM08OlBHHdPTstn5f4xdUoA9GikGmBmPIf2GGZcb5Nsa5mDOMgR")
+GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
 
 # Session storage
 # {session_id: {"report_type": str, "template_path": str, "segments": [], "created_at": datetime}}
@@ -369,12 +377,67 @@ async def email_report(session_id: str, request: Request, req: EmailRequest):
     if not session.get("generated_docx") and not session["segments"]:
         return {"success": False, "error": "無報告可發送"}
     
-    # Email integration placeholder - in production use Maton Gmail API
-    return {
-        "success": True, 
-        "message": f"報告已準備好發送至 {req.to_email}",
-        "note": "Email 功能需要額外設定 SMTP 或 Maton API"
-    }
+    try:
+        import urllib.request
+        
+        # Build email content
+        report_date = datetime.now().strftime('%Y年%m月%d日')
+        report_type_name = get_report_type_name(session.get("report_type", "general"))
+        
+        # Create email
+        msg = MIMEMultipart()
+        msg['to'] = req.to_email
+        msg['subject'] = f"MCH 報告 - {report_date}"
+        
+        # Email body
+        body = f"""
+您好，
+
+這是來自 MCH Assistant 的語音報告。
+
+報告日期：{report_date}
+報告類型：{report_type_name}
+
+--- 錄音內容 ---
+{chr(10).join([f"【段落{i+1}】{seg['transcription']}" for i, seg in enumerate(session['segments'])])}
+
+---
+此郵件由 MCH Assistant 自動發送
+"""
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        # If we have a generated docx, attach it
+        if session.get("generated_docx"):
+            from email.mime.base import MIMEBase
+            from email import encoders
+            part = MIMEBase('application', 'octet-stream')
+            part.set_payload(session["generated_docx"])
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename=MCH_報告_{report_date.replace("年", "").replace("月", "").replace("日", "")}.docx')
+            msg.attach(part)
+        
+        # Encode to base64url
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip('=')
+        
+        # Send via Maton Gmail API
+        data = json.dumps({"raw": raw}).encode()
+        gmail_req = urllib.request.Request(GMAIL_GATEWAY, data=data, method='POST')
+        gmail_req.add_header('Authorization', f'Bearer {MATON_API_KEY}')
+        gmail_req.add_header('Content-Type', 'application/json')
+        
+        with urllib.request.urlopen(gmail_req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            return {
+                "success": True,
+                "message": f"報告已發送至 {req.to_email}",
+                "email_id": result.get("id")
+            }
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode()
+        return {"success": False, "error": f"郵件發送失敗：{error_body}"}
+    except Exception as e:
+        logging.error(f"Email error: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.get("/health")
 async def health():
