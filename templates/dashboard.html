@@ -53,7 +53,7 @@
                 <!-- Recorded segments will appear here -->
             </div>
             
-            <button class="btn btn-secondary" id="addSegmentBtn" disabled>+ 新增段落</button>
+            <button class="btn btn-danger" id="clearBtn">🗑️ 清空重置</button>
         </div>
         
         <div class="actions">
@@ -76,7 +76,7 @@
     const recordBtn = document.getElementById('recordBtn');
     const status = document.getElementById('status');
     const segmentsDiv = document.getElementById('segments');
-    const addSegmentBtn = document.getElementById('addSegmentBtn');
+    const addSegmentBtn = document.getElementById('clearBtn');
     const generateBtn = document.getElementById('generateBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const emailBtn = document.getElementById('emailBtn');
@@ -167,9 +167,26 @@
         generateBtn.disabled = !ready;
     }
     
-    addSegmentBtn.onclick = () => {
-        addSegmentBtn.disabled = true;
-        status.textContent = '點擊麥克風開始錄音';
+    addSegmentBtn.onclick = async () => {
+        if (!confirm('確定要清空所有段落嗎？')) return;
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json();
+            if (data.success) {
+                segments = [];
+                renderSegments();
+                addSegmentBtn.disabled = true;
+                checkGenerateReady();
+                result.innerHTML = '';
+                downloadBtn.disabled = true;
+                emailBtn.disabled = true;
+            }
+        } catch (e) {
+            alert('清空失敗');
+        }
     };
     
     generateBtn.onclick = async () => {

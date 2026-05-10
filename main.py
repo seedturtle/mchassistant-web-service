@@ -634,6 +634,20 @@ async def add_segment(session_id: str, req: AudioSegmentRequest, request: Reques
         "transcription": text
     }
 
+@app.post("/api/sessions/{session_id}/clear")
+async def clear_session(session_id: str, request: Request):
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Clear segments
+    sessions[session_id]["segments"] = []
+    sessions[session_id]["generated_docx"] = None
+    
+    return {"success": True}
+
 @app.post("/api/sessions/{session_id}/generate")
 async def generate_report(session_id: str, request: Request, req: dict):
     if not validate_session(request) or get_session_id(request) != session_id:
