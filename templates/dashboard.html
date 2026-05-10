@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCH Assistant - 語音助理</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="header">
+        <div class="logo">🏥 MCH Assistant</div>
+        <div>
+            <span class="session-id">Session: {{ session_id }}</span>
+            <a href="/api/auth/logout" class="logout">登出</a>
+        </div>
+    </div>
+    
+    <div class="container">
+        <div class="nav">
+            <a href="/dashboard">🏠 主頁</a>
+            <a href="/new">➕ 新建報告</a>
+        </div>
+        
+        <h1>🎙️ 語音錄製</h1>
+        <p class="subtitle">分段錄音，完成後合併產生報告</p>
+        
+        <div class="card">
+            <h3>📋 報告類型</h3>
+            <select id="reportType" class="select-full">
+                <option value="general">一般報告</option>
+                <option value="medical">醫療報告</option>
+                <option value="meeting">會議記錄</option>
+                <option value="swallow">吞嚥評估</option>
+                <option value="ent">耳鼻喉科報告</option>
+            </select>
+        </div>
+        
+        <div class="card">
+            <h3>📄 Word 模板</h3>
+            <p class="hint">上傳 Word 模板（.docx），使用 {'{' + '{'}content{'}' + '}'}、{'{' + '{'}date{'}' + '}'}、{'{' + '{'}report_type{'}' + '}'} 作為佔位符</p>
+            <input type="file" id="templateFile" accept=".docx" class="file-input">
+            <div id="templateStatus" class="template-status"></div>
+        </div>
+        
+        <div class="card recorder-card">
+            <h3>🎤 錄音區段</h3>
+            <div class="recorder-box">
+                <button class="btn-record" id="recordBtn">🎤</button>
+                <div class="status" id="status">點擊麥克風開始錄音</div>
+            </div>
+            
+            <div id="segments" class="segments-container">
+                <!-- Recorded segments will appear here -->
+            </div>
+            
+            <button class="btn btn-secondary" id="addSegmentBtn" disabled>+ 新增段落</button>
+        </div>
+        
+        <div class="actions">
+            <button class="btn btn-generate" id="generateBtn" disabled>📝 產生報告</button>
+            <button class="btn btn-download" id="downloadBtn" disabled>📥 下載</button>
+            <button class="btn btn-email" id="emailBtn" disabled>📧 Email</button>
+        </div>
+        
+        <div id="result" class="result-box"></div>
+    </div>
+    
+    <script>
+    const SESSION_ID = "{{ session_id }}";
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+    let segments = [];
+    let hasTemplate = false;
+    
+    const recordBtn = document.getElementById('recordBtn');
+    const status = document.getElementById('status');
+    const segmentsDiv = document.getElementById('segments');
+    const addSegmentBtn = document.getElementById('addSegmentBtn');
+    const generateBtn = document.getElementById('generateBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const emailBtn = document.getElementById('emailBtn');
+    const templateFile = document.getElementById('templateFile');
+    const templateStatus = document.getElementById('templateStatus');
+    const reportType = document.getElementById('reportType');
+    const result = document.getElementById('result');
+    
+    // Template upload
+    templateFile.onchange = async () => {
+        if (templateFile.files.length > 0) {
+            const file = templateFile.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('session_id', SESSION_ID);
+            
+            try {
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    hasTemplate = true;
+                    templateStatus.innerHTML = '<span class="success">✓ 已上傳：' + file.name + '</span>';
+                    checkGenerateReady();
+                } else {
+                    templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
+                }
+            } catch (e) {
+                templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
+            }
+        }
+    };
+    
+    // Recording
+    recordBtn.onclick = async () => {
+        if (!isRecording) {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+            mediaRecorder.onstop = async () => {
+                const blob = new Blob(audioChunks, { type: 'audio/webm' });
+                const reader = new FileReader();
+                reader.readAsDataURL(blob);
+                reader.onloadend = async () => {
+                    const base64 = reader.result.split(',')[1];
+                    try {
+                        const res = await fetch('/api/sessions/' + SESSION_ID + '/segment', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ audio_data: base64, format: 'webm' })
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                            segments.push({ id: data.segment_id, text: data.transcription });
+                            renderSegments();
+                            addSegmentBtn.disabled = false;
+                            checkGenerateReady();
+                        }
+                    } catch (e) {
+                        alert('轉換失敗');
+                    }
+                    stream.getTracks().forEach(t => t.stop());
+                };
+            };
+            mediaRecorder.start();
+            isRecording = true;
+            recordBtn.textContent = '⏹️';
+            status.textContent = '錄音中...';
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            recordBtn.textContent = '🎤';
+            status.textContent = '錄音完成';
+        }
+    };
+    
+    function renderSegments() {
+        segmentsDiv.innerHTML = segments.map((seg, i) => 
+            '<div class="segment-item"><strong>段落' + (i+1) + ':</strong> ' + seg.text + '</div>'
+        ).join('');
+    }
+    
+    function checkGenerateReady() {
+        const ready = segments.length > 0;
+        generateBtn.disabled = !ready;
+    }
+    
+    addSegmentBtn.onclick = () => {
+        addSegmentBtn.disabled = true;
+        status.textContent = '點擊麥克風開始錄音';
+    };
+    
+    generateBtn.onclick = async () => {
+        generateBtn.textContent = '處理中...';
+        generateBtn.disabled = true;
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ report_type: reportType.value })
+            });
+            const data = await res.json();
+            if (data.success) {
+                result.innerHTML = '<div class="success">✓ 報告已產生！</div>';
+                downloadBtn.disabled = false;
+                emailBtn.disabled = false;
+            } else {
+                result.innerHTML = '<div class="error">產生失敗：' + data.error + '</div>';
+            }
+        } catch (e) {
+            result.innerHTML = '<div class="error">錯誤：' + e.message + '</div>';
+        }
+        generateBtn.textContent = '📝 產生報告';
+        generateBtn.disabled = false;
+    };
+    
+    downloadBtn.onclick = () => {
+        window.location.href = '/api/sessions/' + SESSION_ID + '/download';
+    };
+    
+    emailBtn.onclick = async () => {
+        const email = prompt('請輸入收件者 Email:');
+        if (email) {
+            emailBtn.textContent = '發送中...';
+            emailBtn.disabled = true;
+            try {
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to_email: email })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    alert('✓ 郵件已發送至 ' + email);
+                } else {
+                    alert('發送失敗：' + data.error);
+                }
+            } catch (e) {
+                alert('錯誤：' + e.message);
+            }
+            emailBtn.textContent = '📧 Email';
+            emailBtn.disabled = false;
+        }
+    };
+    </script>
+</body>
+</html>

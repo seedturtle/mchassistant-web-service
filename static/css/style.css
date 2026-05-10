@@ -1,101 +1,403 @@
-/* MCH Assistant Web Service - Styles */
+/* MCH Assistant Web Service - Mobile-First Styles */
 
 :root {
     --primary-color: #e94560;
+    --primary-hover: #d63b53;
     --bg-dark: #1a1a2e;
     --bg-card: #16213e;
+    --bg-card-hover: #1f2b4a;
     --text-light: #ffffff;
+    --text-muted: #888;
+    --success: #4ade80;
+    --error: #f87171;
+    --border-radius: 12px;
+    --transition: 0.3s;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
 
 body {
-    font-family: Arial, sans-serif;
-    margin: 0;
-    padding: 20px;
+    font-family: 'PingFang TC', 'Microsoft JhengHei', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg-dark);
+    color: var(--text-light);
+    min-height: 100vh;
+    line-height: 1.6;
+}
+
+/* Login Page */
+.login-container {
+    max-width: 400px;
+    margin: 15vh auto;
+    padding: 40px 30px;
+    background: var(--bg-card);
+    border-radius: var(--border-radius);
+    text-align: center;
+}
+
+.login-container h1 {
+    color: var(--primary-color);
+    font-size: 28px;
+    margin-bottom: 8px;
+}
+
+.login-container .subtitle {
+    color: var(--text-muted);
+    margin-bottom: 30px;
+    font-size: 14px;
+}
+
+.input-group {
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+.input-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-light);
+    font-size: 14px;
+}
+
+input[type="password"], input[type="email"] {
+    width: 100%;
+    padding: 14px 16px;
+    background: rgba(255,255,255,0.08);
+    border: 2px solid transparent;
+    border-radius: 10px;
+    color: var(--text-light);
+    font-size: 16px;
+    transition: var(--transition);
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    background: rgba(255,255,255,0.12);
+}
+
+.error {
+    color: var(--error);
+    text-align: center;
+    margin-bottom: 15px;
+    display: none;
+    font-size: 14px;
+}
+
+.info {
+    color: var(--text-muted);
+    text-align: center;
+    margin-top: 20px;
+    font-size: 12px;
+}
+
+/* Header */
+.header {
+    background: rgba(255,255,255,0.05);
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.logo {
+    font-size: 18px;
+    color: var(--primary-color);
+    font-weight: bold;
+}
+
+.session-id {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-right: 15px;
+}
+
+.logout {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.logout:hover {
     color: var(--text-light);
 }
 
+/* Container */
 .container {
-    max-width: 800px;
+    max-width: 600px;
     margin: 0 auto;
-    text-align: center;
+    padding: 20px 16px 100px;
+}
+
+/* Navigation */
+.nav {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+}
+
+.nav a {
+    color: var(--text-light);
+    text-decoration: none;
+    font-size: 14px;
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border-radius: 20px;
+    transition: var(--transition);
+}
+
+.nav a:hover {
+    background: var(--bg-card-hover);
 }
 
 h1 {
     color: var(--primary-color);
+    font-size: 24px;
+    margin-bottom: 8px;
 }
 
-.btn {
-    display: inline-block;
-    padding: 15px 30px;
-    margin: 10px;
-    background: var(--primary-color);
-    color: white;
-    text-decoration: none;
-    border-radius: 5px;
+.subtitle {
+    color: var(--text-muted);
+    margin-bottom: 24px;
+    font-size: 14px;
+}
+
+/* Cards */
+.card {
+    background: var(--bg-card);
+    border-radius: var(--border-radius);
+    padding: 20px;
+    margin-bottom: 16px;
+}
+
+.card h3 {
+    color: var(--text-light);
+    font-size: 16px;
+    margin-bottom: 12px;
+}
+
+.hint {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+
+/* Select */
+.select-full {
+    width: 100%;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.08);
+    color: var(--text-light);
     border: none;
+    border-radius: 10px;
+    font-size: 16px;
     cursor: pointer;
 }
 
-.btn:hover {
-    background: #d63b53;
+.select-full option {
+    background: var(--bg-dark);
 }
 
-.card {
-    background: var(--bg-card);
-    padding: 20px;
-    margin: 10px 0;
-    border-radius: 5px;
-    text-align: left;
-}
-
-.nav {
-    background: var(--bg-card);
-    padding: 15px;
-    border-radius: 5px;
-    margin-bottom: 20px;
-}
-
-.nav a {
-    color: white;
-    margin-right: 20px;
-    text-decoration: none;
-}
-
-.recorder {
-    background: var(--bg-card);
-    padding: 30px;
+/* File Input */
+.file-input {
+    width: 100%;
+    padding: 12px;
+    background: rgba(255,255,255,0.05);
+    border: 2px dashed rgba(255,255,255,0.2);
     border-radius: 10px;
-    margin: 20px 0;
+    color: var(--text-light);
+    cursor: pointer;
+}
+
+.template-status {
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.template-status .success {
+    color: var(--success);
+}
+
+.template-status .error {
+    color: var(--error);
+}
+
+/* Recorder */
+.recorder-card {
+    text-align: center;
+}
+
+.recorder-box {
+    padding: 30px 20px;
+    background: rgba(233,69,96,0.08);
+    border: 2px dashed rgba(233,69,96,0.3);
+    border-radius: var(--border-radius);
+    margin-bottom: 16px;
 }
 
 .btn-record {
-    font-size: 48px;
+    font-size: 72px;
     cursor: pointer;
     background: none;
     border: none;
+    transition: transform 0.2s;
+    line-height: 1;
 }
 
-.btn-record:hover {
-    transform: scale(1.1);
+.btn-record:active {
+    transform: scale(0.95);
 }
 
 .status {
-    margin: 20px 0;
-    font-size: 18px;
+    margin-top: 16px;
+    font-size: 16px;
+    color: var(--text-muted);
 }
 
-#waveform {
-    height: 50px;
-    background: #0f3460;
-    border-radius: 5px;
-    margin: 20px 0;
+/* Segments */
+.segments-container {
+    text-align: left;
+    max-height: 250px;
+    overflow-y: auto;
+    margin-bottom: 16px;
 }
 
-select {
-    padding: 10px;
-    background: var(--bg-card);
+.segment-item {
+    background: rgba(255,255,255,0.05);
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.segment-item strong {
+    color: var(--primary-color);
+}
+
+/* Buttons */
+.btn {
+    display: inline-block;
+    padding: 14px 28px;
+    background: var(--primary-color);
     color: white;
+    text-decoration: none;
+    border-radius: 25px;
     border: none;
-    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: var(--transition);
+    min-height: 48px;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background: rgba(255,255,255,0.1);
+    font-size: 14px;
+    padding: 12px 24px;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: rgba(255,255,255,0.15);
+}
+
+.btn-generate {
+    background: var(--primary-color);
+}
+
+.btn-download {
+    background: #3b82f6;
+}
+
+.btn-download:hover:not(:disabled) {
+    background: #2563eb;
+}
+
+.btn-email {
+    background: #10b981;
+}
+
+.btn-email:hover:not(:disabled) {
+    background: #059669;
+}
+
+/* Actions */
+.actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+}
+
+.actions .btn {
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+}
+
+/* Result */
+.result-box {
+    margin-top: 20px;
+    padding: 16px;
+    border-radius: var(--border-radius);
+    text-align: center;
+}
+
+.result-box .success {
+    color: var(--success);
+}
+
+.result-box .error {
+    color: var(--error);
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .container {
+        padding: 16px 12px 80px;
+    }
+    
+    .actions {
+        flex-direction: column;
+    }
+    
+    .actions .btn {
+        width: 100%;
+    }
+    
+    .recorder-box {
+        padding: 20px 15px;
+    }
+    
+    .btn-record {
+        font-size: 64px;
+    }
+}
+
+@media (min-width: 768px) {
+    .container {
+        padding: 40px 20px 100px;
+    }
+    
+    .card {
+        padding: 24px;
+    }
 }

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCH Assistant - 登入</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="login-container">
+        <h1>🏥 MCH Assistant</h1>
+        <p class="subtitle">門諾醫院 AI 語音助理</p>
+        <p id="error" class="error">密碼錯誤，請重新輸入</p>
+        <form id="loginForm">
+            <div class="input-group">
+                <label for="password">🔐 請輸入存取密碼</label>
+                <input type="password" id="password" name="password" placeholder="輸入密碼" required>
+            </div>
+            <button type="submit" class="btn">登入</button>
+        </form>
+        <p class="info">僅限醫院內部人員使用</p>
+    </div>
+    <script>
+        document.getElementById('loginForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('password').value;
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({password: password})
+            });
+            if (response.ok) {
+                window.location.href = '/dashboard';
+            } else {
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('password').value = '';
+            }
+        };
+    </script>
+</body>
+</html>
