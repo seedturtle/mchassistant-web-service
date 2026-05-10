@@ -1,6 +1,6 @@
 """
-Hermes Web Service - Voice to Report AI Agent
-FastAPI application connecting to Hermes AI Agent
+MCH Assistant Web Service - 門諾醫院AI語音助理
+語音轉文字並生成專業報告
 """
 
 import os
@@ -10,139 +10,89 @@ from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Depends, status
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from jose import JWTError, jwt
-from passlib.context import CryptContext
 import uuid
 
 # =============================================================================
 # Configuration
 # =============================================================================
 
-SECRET_KEY = os.getenv("SECRET_KEY", "hermes-web-service-secret-key-change-in-production")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+# 登入密碼（暫時設定）
+ACCESS_PASSWORD = "ABC1234"
 
-# =============================================================================
-# Password Hashing
-# =============================================================================
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-# =============================================================================
-# Token Management
-# =============================================================================
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-# =============================================================================
-# Mock Database (Replace with real database in production)
-# =============================================================================
-
-users_db = {}  # {username: {hash, name, email}}
-reports_db = {}  # {report_id: {content, created_at, user}}
+# Session storage (simple in-memory for demo)
+sessions = {}  # {session_id: {"logged_in": True, "user": "admin"}}
 
 # =============================================================================
 # Pydantic Models
 # =============================================================================
 
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class UserRegister(BaseModel):
-    username: str
-    password: str
-    name: str
-    email: str
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
 class AudioTranscribeRequest(BaseModel):
     audio_data: str  # Base64 encoded audio
     format: str = "webm"
-
-class ReportGenerateRequest(BaseModel):
-    transcription: str
-    report_type: str = "general"  # general, medical, research, etc.
-
-class Report(BaseModel):
-    id: str
-    content: str
-    created_at: str
-    user: str
+    report_type: str = "general"
 
 # =============================================================================
 # Hermes Integration Service
 # =============================================================================
 
 class HermesService:
-    """Service to interact with Hermes AI Agent"""
+    """與 Hermes AI Agent 串接的服務"""
     
     def __init__(self):
         self.api_key = os.getenv("HERMES_API_KEY", "")
-        self.base_url = os.getenv("HERMES_BASE_URL", "https://api.minimax.io")
         self.model = os.getenv("HERMES_MODEL", "minimax/minimax-m2.7")
     
     async def generate_report(self, transcription: str, report_type: str = "general") -> str:
         """
-        Send transcription to Hermes Agent and get a structured report back.
+        將文字轉換為專業報告
         """
-        prompt = f"""You are a professional report generator. Based on the following transcription,
-generate a well-structured {report_type} report.
-
-Transcription:
-{transcription}
-
-Please generate a comprehensive, professional report based on this information.
-"""
+        # 這裡是示範報告格式，實際使用時會串接 Hermes AI
+        report_date = datetime.now().strftime('%Y年%m月%d日 %H:%M')
         
-        # In production, this would call the actual Hermes API
-        # For now, return a mock report structure
-        mock_report = f"""
-# {report_type.title()} Report
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        if report_type == "medical":
+            return f"""# 醫療報告
+生成時間：{report_date}
 
-## Summary
-This report summarizes the key points from the transcription.
-
-## Content Analysis
+## 語音轉文字內容
 {transcription}
 
-## Key Findings
-- Point 1: [To be filled by AI]
-- Point 2: [To be filled by AI]
-- Point 3: [To be filled by AI]
-
-## Recommendations
-1. [Recommendation 1]
-2. [Recommendation 2]
+## 診斷摘要
+本報告由 AI 語音助理根據語音輸入自動生成。
+如有醫療需求，請諮詢專業醫護人員。
 
 ---
-Report generated by Hermes AI Agent
+MCH Assistant 門諾醫院AI助理
 """
-        
-        return mock_report
+        elif report_type == "meeting":
+            return f"""# 會議記錄
+生成時間：{report_date}
+
+## 語音轉文字內容
+{transcription}
+
+## 重點摘要
+- 待補充
+
+---
+MCH Assistant 門諾醫院AI助理
+"""
+        else:
+            return f"""# 報告
+生成時間：{report_date}
+
+## 語音轉文字內容
+{transcription}
+
+## 備註
+本報告由 MCH Assistant 語音助理生成。
+
+---
+MCH Assistant 門諾醫院AI助理
+"""
 
 hermes_service = HermesService()
 
@@ -152,230 +102,355 @@ hermes_service = HermesService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.info("Hermes Web Service starting up...")
+    logging.info("MCH Assistant Web Service 啟動中...")
     yield
-    logging.info("Hermes Web Service shutting down...")
+    logging.info("MCH Assistant Web Service 關閉中...")
 
 # =============================================================================
 # FastAPI Application
 # =============================================================================
 
 app = FastAPI(
-    title="Hermes Web Service",
-    description="Voice to Report AI Agent - Connect to Hermes AI",
+    title="MCH Assistant 語音助理",
+    description="門諾醫院AI語音助理 - 語音轉文字生成報告",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# Static files and templates
+# Static files
 BASE_DIR = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 # =============================================================================
 # Helper Functions
 # =============================================================================
 
-async def get_current_user(token: str) -> Optional[str]:
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            return None
-        return username
-    except JWTError:
-        return None
+def get_session_id(request: Request) -> Optional[str]:
+    return request.cookies.get("session_id")
+
+def validate_session(request: Request) -> bool:
+    session_id = get_session_id(request)
+    if session_id and session_id in sessions:
+        return True
+    return False
+
+def create_session():
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {"logged_in": True}
+    return session_id
 
 # =============================================================================
 # Pages (HTML)
 # =============================================================================
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Hermes Web Service</title>
-        <meta charset="UTF-8">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: white; }
-            .container { max-width: 800px; margin: 0 auto; text-align: center; }
-            h1 { color: #e94560; }
-            .btn { display: inline-block; padding: 15px 30px; margin: 10px; background: #e94560; color: white; text-decoration: none; border-radius: 5px; }
-            .features { text-align: left; margin-top: 30px; }
-            .feature { background: #16213e; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎙️ Hermes Web Service</h1>
-            <p>AI-powered voice to report service</p>
-            <a href="/login" class="btn">Login</a>
-            <a href="/register" class="btn">Register</a>
-            <div class="features">
-                <div class="feature">🎙️ <strong>Voice Recording</strong> - Record voice and transcribe</div>
-                <div class="feature">🤖 <strong>AI Processing</strong> - Connect to Hermes Agent</div>
-                <div class="feature">📊 <strong>Report Generation</strong> - Professional structured reports</div>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+async def root(request: Request):
+    """首頁 - 檢查登入狀態"""
+    if not validate_session(request):
+        return RedirectResponse(url="/login", status_code=302)
+    return RedirectResponse(url="/dashboard", status_code=302)
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page():
+async def login_page(request: Request):
+    """登入頁面"""
+    if validate_session(request):
+        return RedirectResponse(url="/dashboard", status_code=302)
+    
     return """
     <!DOCTYPE html>
-    <html>
+    <html lang="zh-TW">
     <head>
-        <title>Login - Hermes Web Service</title>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MCH Assistant - 登入</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: white; }
-            .container { max-width: 400px; margin: 100px auto; }
-            input { width: 100%; padding: 15px; margin: 10px 0; background: #16213e; border: none; color: white; border-radius: 5px; box-sizing: border-box; }
-            .btn { width: 100%; padding: 15px; background: #e94560; color: white; border: none; border-radius: 5px; cursor: pointer; }
-            .btn:hover { background: #d63b53; }
-            h1 { text-align: center; }
-            .error { color: #ff6b6b; text-align: center; }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+                font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; 
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .login-container {
+                background: rgba(255,255,255,0.1);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                padding: 40px;
+                width: 100%;
+                max-width: 400px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            }
+            h1 { 
+                color: #e94560; 
+                text-align: center;
+                margin-bottom: 10px;
+                font-size: 28px;
+            }
+            .subtitle {
+                color: #aaa;
+                text-align: center;
+                margin-bottom: 30px;
+                font-size: 14px;
+            }
+            .input-group { margin-bottom: 20px; }
+            label { 
+                display: block; 
+                color: #fff; 
+                margin-bottom: 8px;
+                font-size: 14px;
+            }
+            input { 
+                width: 100%; 
+                padding: 15px; 
+                background: rgba(255,255,255,0.1);
+                border: 2px solid transparent;
+                border-radius: 10px;
+                color: #fff;
+                font-size: 16px;
+                transition: all 0.3s;
+            }
+            input:focus {
+                outline: none;
+                border-color: #e94560;
+                background: rgba(255,255,255,0.15);
+            }
+            .btn {
+                width: 100%;
+                padding: 15px;
+                background: #e94560;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-size: 18px;
+                cursor: pointer;
+                transition: all 0.3s;
+                font-family: inherit;
+            }
+            .btn:hover { background: #d63b53; transform: translateY(-2px); }
+            .error { 
+                color: #ff6b6b; 
+                text-align: center; 
+                margin-bottom: 15px;
+                display: none;
+            }
+            .info {
+                color: #888;
+                text-align: center;
+                margin-top: 20px;
+                font-size: 12px;
+            }
         </style>
     </head>
     <body>
-        <div class="container">
-            <h1>🔐 Login</h1>
-            <form action="/api/auth/login" method="post">
-                <input type="text" name="username" placeholder="Username" required>
-                <input type="password" name="password" placeholder="Password" required>
-                <button type="submit" class="btn">Login</button>
+        <div class="login-container">
+            <h1>🏥 MCH Assistant</h1>
+            <p class="subtitle">門諾醫院 AI 語音助理</p>
+            <p id="error" class="error">密碼錯誤，請重新輸入</p>
+            <form id="loginForm">
+                <div class="input-group">
+                    <label for="password">🔐 請輸入存取密碼</label>
+                    <input type="password" id="password" name="password" placeholder="輸入密碼" required>
+                </div>
+                <button type="submit" class="btn">登入</button>
             </form>
-            <p style="text-align: center; margin-top: 20px;">Don't have an account? <a href="/register" style="color: #e94560;">Register</a></p>
+            <p class="info">僅限醫院內部人員使用</p>
         </div>
+        <script>
+            document.getElementById('loginForm').onsubmit = async (e) => {
+                e.preventDefault();
+                const password = document.getElementById('password').value;
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password: password})
+                });
+                if (response.ok) {
+                    window.location.href = '/dashboard';
+                } else {
+                    document.getElementById('error').style.display = 'block';
+                    document.getElementById('password').value = '';
+                }
+            };
+        </script>
     </body>
     </html>
     """
 
-@app.get("/register", response_class=HTMLResponse)
-async def register_page():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Register - Hermes Web Service</title>
-        <meta charset="UTF-8">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: white; }
-            .container { max-width: 400px; margin: 50px auto; }
-            input { width: 100%; padding: 15px; margin: 10px 0; background: #16213e; border: none; color: white; border-radius: 5px; box-sizing: border-box; }
-            .btn { width: 100%; padding: 15px; background: #e94560; color: white; border: none; border-radius: 5px; cursor: pointer; }
-            h1 { text-align: center; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>📝 Register</h1>
-            <form action="/api/auth/register" method="post">
-                <input type="text" name="username" placeholder="Username" required>
-                <input type="password" name="password" placeholder="Password" required>
-                <input type="text" name="name" placeholder="Full Name" required>
-                <input type="email" name="email" placeholder="Email" required>
-                <button type="submit" class="btn">Register</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
+@app.post("/api/auth/login")
+async def login(request_data: dict):
+    """驗證登入"""
+    password = request_data.get("password", "")
+    if password == ACCESS_PASSWORD:
+        session_id = create_session()
+        response = RedirectResponse(url="/dashboard", status_code=302)
+        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+        return response
+    raise HTTPException(status_code=401, detail="Invalid password")
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(token: str = None):
+async def dashboard(request: Request):
+    """儀表板首頁"""
+    if not validate_session(request):
+        return RedirectResponse(url="/login", status_code=302)
+    
     return """
     <!DOCTYPE html>
-    <html>
+    <html lang="zh-TW">
     <head>
-        <title>Dashboard - Hermes Web Service</title>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>MCH Assistant - 語音助理</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: white; }
-            .container { max-width: 900px; margin: 0 auto; }
-            h1 { color: #e94560; }
-            .nav { background: #16213e; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-            .nav a { color: white; margin-right: 20px; text-decoration: none; }
-            .card { background: #16213e; padding: 20px; margin: 10px 0; border-radius: 5px; }
-            .btn { display: inline-block; padding: 10px 20px; background: #e94560; color: white; text-decoration: none; border-radius: 5px; }
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { 
+                font-family: 'PingFang TC', 'Microsoft JhengHei', sans-serif; 
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                min-height: 100vh;
+                color: #fff;
+            }
+            .header {
+                background: rgba(255,255,255,0.05);
+                padding: 20px 40px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid rgba(255,255,255,0.1);
+            }
+            .logo { font-size: 24px; color: #e94560; }
+            .logout { color: #888; text-decoration: none; font-size: 14px; }
+            .container { max-width: 900px; margin: 40px auto; padding: 0 20px; }
+            h1 { color: #e94560; margin-bottom: 10px; }
+            .subtitle { color: #888; margin-bottom: 30px; }
+            .card {
+                background: rgba(255,255,255,0.05);
+                border-radius: 15px;
+                padding: 30px;
+                margin-bottom: 20px;
+            }
+            .card h2 { color: #e94560; margin-bottom: 15px; }
+            .card p { color: #aaa; line-height: 1.6; }
+            .btn-start {
+                display: inline-block;
+                padding: 15px 40px;
+                background: #e94560;
+                color: white;
+                border-radius: 10px;
+                text-decoration: none;
+                font-size: 18px;
+                margin-top: 20px;
+                transition: all 0.3s;
+            }
+            .btn-start:hover { background: #d63b53; transform: translateY(-2px); }
+            .recorder-box {
+                background: rgba(233,69,96,0.1);
+                border: 2px dashed #e94560;
+                border-radius: 15px;
+                padding: 40px;
+                text-align: center;
+                margin: 20px 0;
+            }
+            .record-btn {
+                font-size: 64px;
+                cursor: pointer;
+                background: none;
+                border: none;
+                transition: transform 0.3s;
+            }
+            .record-btn:hover { transform: scale(1.1); }
+            .status { margin: 20px 0; font-size: 18px; color: #aaa; }
+            .waveform {
+                height: 60px;
+                background: rgba(255,255,255,0.05);
+                border-radius: 10px;
+                margin: 20px 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: #666;
+            }
+            .report-type {
+                margin: 20px 0;
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .report-type label { color: #fff; margin-right: 10px; }
+            .report-type select {
+                padding: 10px 20px;
+                background: rgba(255,255,255,0.1);
+                color: #fff;
+                border: none;
+                border-radius: 5px;
+                font-size: 16px;
+            }
+            .btn-generate {
+                padding: 15px 40px;
+                background: #e94560;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-size: 18px;
+                cursor: pointer;
+                margin-top: 20px;
+                display: none;
+            }
+            .btn-generate:hover { background: #d63b53; }
+            #result {
+                background: rgba(255,255,255,0.05);
+                border-radius: 10px;
+                padding: 20px;
+                margin-top: 20px;
+                display: none;
+            }
+            #result pre { white-space: pre-wrap; line-height: 1.6; }
+            .nav { margin-bottom: 30px; }
+            .nav a {
+                color: #e94560;
+                text-decoration: none;
+                margin-right: 20px;
+                font-size: 14px;
+            }
         </style>
     </head>
     <body>
+        <div class="header">
+            <div class="logo">🏥 MCH Assistant</div>
+            <a href="/api/auth/logout" class="logout">登出</a>
+        </div>
         <div class="container">
             <div class="nav">
-                <a href="/dashboard">Dashboard</a>
-                <a href="/record">🎙️ New Recording</a>
-                <a href="/reports">My Reports</a>
+                <a href="/dashboard">🏠 首頁</a>
+                <a href="/record">🎙️ 錄音</a>
             </div>
-            <h1>Welcome to Hermes Web Service</h1>
-            <div class="card">
-                <h2>🎙️ Voice to Report</h2>
-                <p>Record your voice and get professional reports powered by AI.</p>
-                <a href="/record" class="btn">Start Recording</a>
-            </div>
-            <div class="card">
-                <h2>📊 Recent Reports</h2>
-                <p>No reports yet. Start by creating one!</p>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-@app.get("/record", response_class=HTMLResponse)
-async def record_page():
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Record - Hermes Web Service</title>
-        <meta charset="UTF-8">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #1a1a2e; color: white; }
-            .container { max-width: 600px; margin: 0 auto; text-align: center; }
-            h1 { color: #e94560; }
-            .recorder { background: #16213e; padding: 30px; border-radius: 10px; margin: 20px 0; }
-            .btn-record { font-size: 48px; cursor: pointer; background: none; border: none; }
-            .btn-record:hover { transform: scale(1.1); }
-            .status { margin: 20px 0; font-size: 18px; }
-            #waveform { height: 50px; background: #0f3460; border-radius: 5px; margin: 20px 0; }
-            .report-type { margin: 20px 0; }
-            select { padding: 10px; background: #16213e; color: white; border: none; border-radius: 5px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎙️ Voice Recording</h1>
-            <div class="recorder">
-                <button class="btn-record" id="recordBtn">🎤</button>
-                <div class="status" id="status">Click to start recording</div>
-                <div id="waveform"></div>
+            <h1>🎙️ 語音錄製</h1>
+            <p class="subtitle">錄製語音並轉換為專業報告</p>
+            <div class="recorder-box">
+                <button class="record-btn" id="recordBtn">🎤</button>
+                <div class="status" id="status">點擊麥克風開始錄音</div>
+                <div class="waveform" id="waveform">錄音波形區域</div>
                 <div class="report-type">
-                    <label for="reportType">Report Type: </label>
+                    <label for="reportType">報告類型：</label>
                     <select id="reportType">
-                        <option value="general">General</option>
-                        <option value="medical">Medical</option>
-                        <option value="research">Research</option>
-                        <option value="business">Business</option>
+                        <option value="general">一般報告</option>
+                        <option value="medical">醫療報告</option>
+                        <option value="meeting">會議記錄</option>
                     </select>
                 </div>
-                <button id="submitBtn" class="btn-submit" style="display:none; padding: 15px 30px; background: #e94560; color: white; border: none; border-radius: 5px; cursor: pointer;">Generate Report</button>
+                <button class="btn-generate" id="submitBtn">生成報告</button>
             </div>
-            <div id="result" style="display:none; background: #16213e; padding: 20px; border-radius: 10px; margin-top: 20px; text-align: left;"></div>
+            <div id="result"></div>
         </div>
         <script>
             let mediaRecorder;
             let audioChunks = [];
             let isRecording = false;
+            let audioBlob;
             const recordBtn = document.getElementById('recordBtn');
             const status = document.getElementById('status');
             const submitBtn = document.getElementById('submitBtn');
             const result = document.getElementById('result');
-            let audioBlob;
 
             recordBtn.onclick = async () => {
                 if (!isRecording) {
@@ -390,17 +465,23 @@ async def record_page():
                     mediaRecorder.start();
                     isRecording = true;
                     recordBtn.textContent = '⏹️';
-                    status.textContent = 'Recording... Click to stop';
+                    status.textContent = '錄音中... 再次點擊停止';
+                    document.getElementById('waveform').textContent = '▓▓▓▓▓▓▓▓▓▓';
                 } else {
                     mediaRecorder.stop();
                     isRecording = false;
                     recordBtn.textContent = '🎤';
-                    status.textContent = 'Recording complete';
+                    status.textContent = '錄音完成';
+                    document.getElementById('waveform').textContent = '錄音已完成';
                 }
             };
 
             submitBtn.onclick = async () => {
-                submitBtn.textContent = 'Processing...';
+                if (!audioBlob) {
+                    alert('請先錄音');
+                    return;
+                }
+                submitBtn.textContent = '處理中...';
                 submitBtn.disabled = true;
                 
                 const reader = new FileReader();
@@ -413,16 +494,20 @@ async def record_page():
                         const response = await fetch('/api/audio/transcribe', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ audio_data: base64, format: 'webm', report_type: reportType })
+                            body: JSON.stringify({ 
+                                audio_data: base64, 
+                                format: 'webm',
+                                report_type: reportType 
+                            })
                         });
                         const data = await response.json();
                         result.style.display = 'block';
-                        result.innerHTML = '<pre style="white-space: pre-wrap;">' + data.report + '</pre>';
+                        result.innerHTML = '<pre>' + data.report + '</pre>';
                     } catch (err) {
                         result.style.display = 'block';
-                        result.innerHTML = 'Error: ' + err.message;
+                        result.innerHTML = '錯誤: ' + err.message;
                     }
-                    submitBtn.textContent = 'Generate Report';
+                    submitBtn.textContent = '生成報告';
                     submitBtn.disabled = false;
                 };
             };
@@ -431,88 +516,40 @@ async def record_page():
     </html>
     """
 
+@app.get("/api/auth/logout")
+async def logout():
+    """登出"""
+    response = RedirectResponse(url="/login", status_code=302)
+    response.delete_cookie("session_id")
+    return response
+
 # =============================================================================
 # API Endpoints
 # =============================================================================
 
-@app.post("/api/auth/login")
-async def login(user: UserLogin):
-    if user.username not in users_db:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    stored_hash = users_db[user.username]["hash"]
-    if not verify_password(user.password, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-@app.post("/api/auth/register")
-async def register(user: UserRegister):
-    if user.username in users_db:
-        raise HTTPException(status_code=400, detail="Username already exists")
-    
-    users_db[user.username] = {
-        "hash": get_password_hash(user.password),
-        "name": user.name,
-        "email": user.email
-    }
-    
-    return {"message": "User registered successfully"}
-
 @app.post("/api/audio/transcribe")
-async def transcribe_audio(req: AudioTranscribeRequest, token: Optional[str] = None):
-    """
-    Receive audio data, convert to text, then generate report via Hermes.
-    """
-    # In production, integrate with actual STT service
-    mock_transcription = "This is a mock transcription. In production, this would use a real STT service like Whisper."
+async def transcribe_audio(req: AudioTranscribeRequest, request: Request):
+    """接收音訊資料，轉換為文字並生成報告"""
+    if not validate_session(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     
-    report = await hermes_service.generate_report(mock_transcription, req.report_type)
+    # 這裡是示範用的即興文字，實際會串接語音轉文字服務
+    transcription = "這是語音轉換的文字內容。在實際部署時，這裡會串接專業的語音辨識服務（如 Whisper、Azure Speech 等）來將音訊轉換為文字。\n\n虛擬文字內容：\n- 病人主訴症狀\n- 醫療處置建議\n- 用藥注意事項"
     
-    report_id = str(uuid.uuid4())
-    reports_db[report_id] = {
-        "content": report,
-        "created_at": datetime.now().isoformat(),
-        "user": "anonymous"
-    }
+    report = await hermes_service.generate_report(transcription, req.report_type)
     
-    return {"transcription": mock_transcription, "report": report, "report_id": report_id}
-
-@app.post("/api/reports/generate")
-async def generate_report_endpoint(req: ReportGenerateRequest, token: Optional[str] = None):
-    """Generate a report from transcription text"""
-    report = await hermes_service.generate_report(req.transcription, req.report_type)
-    
-    report_id = str(uuid.uuid4())
-    reports_db[report_id] = {
-        "content": report,
-        "created_at": datetime.now().isoformat(),
-        "user": "anonymous"
-    }
-    
-    return {"report_id": report_id, "report": report}
-
-@app.get("/api/reports/{report_id}")
-async def get_report(report_id: str):
-    if report_id not in reports_db:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return reports_db[report_id]
-
-# =============================================================================
-# Health Check
-# =============================================================================
+    return {"transcription": transcription, "report": report}
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "service": "hermes-web-service"}
+    return {"status": "healthy", "service": "MCH Assistant"}
 
 @app.get("/api/status")
 async def api_status():
     return {
-        "hermes_connected": bool(hermes_service.api_key),
-        "model": hermes_service.model,
-        "version": "1.0.0"
+        "service": "MCH Assistant",
+        "version": "1.0.0",
+        "status": "running"
     }
 
 # =============================================================================
