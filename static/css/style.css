@@ -1,0 +1,101 @@
+/* MCH Assistant Web Service - Styles */
+
+:root {
+    --primary-color: #e94560;
+    --bg-dark: #1a1a2e;
+    --bg-card: #16213e;
+    --text-light: #ffffff;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: var(--bg-dark);
+    color: var(--text-light);
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+h1 {
+    color: var(--primary-color);
+}
+
+.btn {
+    display: inline-block;
+    padding: 15px 30px;
+    margin: 10px;
+    background: var(--primary-color);
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+    border: none;
+    cursor: pointer;
+}
+
+.btn:hover {
+    background: #d63b53;
+}
+
+.card {
+    background: var(--bg-card);
+    padding: 20px;
+    margin: 10px 0;
+    border-radius: 5px;
+    text-align: left;
+}
+
+.nav {
+    background: var(--bg-card);
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 20px;
+}
+
+.nav a {
+    color: white;
+    margin-right: 20px;
+    text-decoration: none;
+}
+
+.recorder {
+    background: var(--bg-card);
+    padding: 30px;
+    border-radius: 10px;
+    margin: 20px 0;
+}
+
+.btn-record {
+    font-size: 48px;
+    cursor: pointer;
+    background: none;
+    border: none;
+}
+
+.btn-record:hover {
+    transform: scale(1.1);
+}
+
+.status {
+    margin: 20px 0;
+    font-size: 18px;
+}
+
+#waveform {
+    height: 50px;
+    background: #0f3460;
+    border-radius: 5px;
+    margin: 20px 0;
+}
+
+select {
+    padding: 10px;
+    background: var(--bg-card);
+    color: white;
+    border: none;
+    border-radius: 5px;
+}
