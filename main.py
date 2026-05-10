@@ -39,7 +39,7 @@ HF_TOKEN=os.getenv("HF_TOKEN", "")
 
 # MiniMax API (for report summarization)
 MINIMAX_API_KEY=os.getenv("MINIMAX_API_KEY", "")
-MINIMAX_API_GATEWAY="https://api.minimax.chat/v1/text/chatcompletion_v2"
+MINIMAX_API_GATEWAY="https://api.minimax.io/v1/text/chatcompletion_v2"
 
 # Session storage
 # {session_id: {"report_type": str, "template_path": str, "segments": [], "created_at": datetime}}
@@ -154,15 +154,9 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
         }
         type_name = report_type_names.get(report_type, "報告")
         
-        system_prompt = """你是門諾醫院語音助理，專門幫醫師整理門診或會議記錄。
+        system_prompt = """你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。
 
-請根據以下口語錄音內容，幫我：
-1. 修正明顯的語音辨識錯誤
-2. 把口語整理成正式的醫療報告格式
-3. 分類並結構化內容（主訴、現病史、理學檢查、診斷等）
-
-重要：輸出時「不要」保留【段落1】【段落2】這類標記，直接輸出乾淨的報告文字。
-請用繁體中文回覆，直接輸出整理後的報告內容，不需要額外說明。"""
+報告類型："""
 
         user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
         
