@@ -159,6 +159,7 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
 2. 把口語整理成正式的醫療報告格式
 3. 分類並結構化內容（主訴、現病史、理學檢查、診斷等）
 
+重要：輸出時「不要」保留【段落1】【段落2】這類標記，直接輸出乾淨的報告文字。
 請用繁體中文回覆，直接輸出整理後的報告內容，不需要額外說明。"""
 
         user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
