@@ -42,7 +42,7 @@ MINIMAX_API_KEY=os.getenv("MINIMAX_API_KEY", "")
 MINIMAX_API_GATEWAY="https://api.minimax.io/v1/text/chatcompletion_v2"
 
 # Session storage
-# {session_id: {"report_type": str, "template_name": str, "segments": [], "created_at": datetime}}
+# {session_id: {"report_type": str, "segments": [], "created_at": datetime}}
 sessions = {}
 executor = ThreadPoolExecutor(max_workers=2)
 
@@ -102,7 +102,6 @@ def get_or_create_session() -> str:
     session_id = str(uuid.uuid4())[:8]
     sessions[session_id] = {
         "report_type": "general",
-        "template_name": None,
         "segments": [],
         "generated_docx": None,
         "created_at": datetime.now()
@@ -360,12 +359,8 @@ async def dashboard(request: Request):
         
         <div class="card">
             <h3>📄 Word 模板</h3>
-            <p class="hint">選擇已儲存的模板，或上傳新的（使用 {{content}}、{{date}}、{{report_type}} 作為佔位符）</p>
-            <div id="templateList" class="template-list"></div>
-            <div class="template-upload-row">
-                <input type="file" id="templateFile" accept=".docx" class="file-input">
-                <button class="btn btn-sm" id="uploadTemplateBtn" disabled>上傳</button>
-            </div>
+            <p class="hint">上傳一次即永久留存在伺服器（再次上傳會覆蓋舊的）。使用 {{content}}、{{date}}、{{report_type}} 作為佔位符</p>
+            <input type="file" id="templateFile" accept=".docx" class="file-input">
             <div id="templateStatus" class="template-status"></div>
         </div>
         
@@ -407,146 +402,35 @@ async def dashboard(request: Request):
     const emailBtn = document.getElementById('emailBtn');
     const templateFile = document.getElementById('templateFile');
     const templateStatus = document.getElementById('templateStatus');
-    const templateList = document.getElementById('templateList');
-    const uploadTemplateBtn = document.getElementById('uploadTemplateBtn');
     const reportType = document.getElementById('reportType');
     const result = document.getElementById('result');
+    let hasTemplate = false;
     
-    let selectedTemplate = null;
-    
-    // Load saved templates
-    async function loadTemplates() {
-        try {
-            const res = await fetch('/api/templates');
-            const data = await res.json();
-            if (data.success) {
-                renderTemplates(data.templates);
-            }
-        } catch (e) {
-            console.error('Failed to load templates:', e);
-        }
-    }
-    
-    function renderTemplates(templates) {
-        if (!templateList) return;
-        if (templates.length === 0) {
-            templateList.innerHTML = '<div class="template-empty">尚未上傳任何模板</div>';
-            return;
-        }
-        templateList.innerHTML = templates.map(t => 
-            `<div class="template-item${selectedTemplate === t.name ? ' active' : ''}" data-name="${t.name}">
-                <span class="name">📄 ${t.name}</span>
-                <button class="delete-btn" data-name="${t.name}" title="刪除模板">✕</button>
-            </div>`
-        ).join('');
-        
-        // Click to select template
-        templateList.querySelectorAll('.template-item').forEach(el => {
-            el.addEventListener('click', (e) => {
-                if (e.target.classList.contains('delete-btn')) return;
-                const name = el.dataset.name;
-                selectTemplate(name);
-            });
-        });
-        
-        // Delete template
-        templateList.querySelectorAll('.delete-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const name = btn.dataset.name;
-                if (!confirm(`刪除模板「${name}」？`)) return;
-                try {
-                    const res = await fetch('/api/templates/' + encodeURIComponent(name), {
-                        method: 'DELETE'
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        if (selectedTemplate === name) {
-                            selectedTemplate = null;
-                            hasTemplate = false;
-                            templateStatus.innerHTML = '';
-                        }
-                        await loadTemplates();
-                    }
-                } catch (e) {
-                    alert('刪除失敗：' + e.message);
+    // Template upload — 上傳即永久儲存，再次上傳會覆蓋
+    templateFile.onchange = async () => {
+        if (templateFile.files.length > 0) {
+            const file = templateFile.files[0];
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('session_id', SESSION_ID);
+            
+            try {
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (data.success) {
+                    hasTemplate = true;
+                    templateStatus.innerHTML = '<span class="success">✓ 已儲存：' + data.filename + '</span>';
+                } else {
+                    templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
                 }
-            });
-        });
-    }
-    
-    async function selectTemplate(name) {
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/template/select', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ template_name: name })
-            });
-            const data = await res.json();
-            if (data.success) {
-                selectedTemplate = name;
-                hasTemplate = true;
-                templateStatus.innerHTML = '<span class="success">✓ 已選取：' + name + '</span>';
-                checkGenerateReady();
-            } else {
-                templateStatus.innerHTML = '<span class="error">選取失敗</span>';
+            } catch (e) {
+                templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
             }
-        } catch (e) {
-            templateStatus.innerHTML = '<span class="error">選取失敗：' + e.message + '</span>';
         }
-        renderTemplates(await fetchSavedTemplates());
-    }
-    
-    async function fetchSavedTemplates() {
-        try {
-            const res = await fetch('/api/templates');
-            const data = await res.json();
-            if (data.success) return data.templates;
-        } catch(e) {}
-        return [];
-    }
-    
-    // Template upload
-    templateFile.addEventListener('change', () => {
-        uploadTemplateBtn.disabled = templateFile.files.length === 0;
-    });
-    
-    uploadTemplateBtn.addEventListener('click', async () => {
-        if (templateFile.files.length === 0) return;
-        const file = templateFile.files[0];
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('session_id', SESSION_ID);
-        
-        uploadTemplateBtn.textContent = '上傳中...';
-        uploadTemplateBtn.disabled = true;
-        
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
-                method: 'POST',
-                body: formData
-            });
-            const data = await res.json();
-            if (data.success) {
-                selectedTemplate = data.filename;
-                hasTemplate = true;
-                templateStatus.innerHTML = '<span class="success">✓ 已上傳並選取：' + data.filename + '</span>';
-                templateFile.value = '';
-                uploadTemplateBtn.disabled = true;
-                checkGenerateReady();
-                await loadTemplates();
-            } else {
-                templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
-            }
-        } catch (e) {
-            templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
-        }
-        uploadTemplateBtn.textContent = '上傳';
-        uploadTemplateBtn.disabled = templateFile.files.length === 0;
-    });
-    
-    // Load templates on startup
-    loadTemplates();
+    };
     
     recordBtn.onclick = async () => {
         if (!isRecording) {
@@ -712,70 +596,13 @@ async def upload_template(session_id: str, request: Request, file: UploadFile = 
     if not file.filename.endswith('.docx'):
         return {"success": False, "error": "請上傳 .docx 檔案"}
     
-    # Save template persistently to templates directory
-    template_path = TEMPLATES_DIR / file.filename
-    
-    # Handle duplicate filenames by appending number
-    counter = 1
-    while template_path.exists():
-        name_stem = template_path.stem.rsplit("_", 1)[0] if "_" in template_path.stem else template_path.stem
-        template_path = TEMPLATES_DIR / f"{name_stem}_{counter}.docx"
-        counter += 1
-    
+    # Save as the one persistent template (overwrite previous)
+    template_path = TEMPLATES_DIR / "template.docx"
     with open(template_path, "wb") as f:
         content = await file.read()
         f.write(content)
     
-    # Associate with current session
-    sessions[session_id]["template_name"] = template_path.name
-    
-    return {"success": True, "filename": template_path.name}
-
-@app.get("/api/templates")
-async def list_templates(request: Request):
-    """List all persistently stored templates"""
-    if not validate_session(request):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    templates = []
-    for f in sorted(TEMPLATES_DIR.iterdir()):
-        if f.suffix == ".docx":
-            templates.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat()
-            })
-    return {"success": True, "templates": templates}
-
-@app.delete("/api/templates/{template_name}")
-async def delete_template(template_name: str, request: Request):
-    """Delete a saved template"""
-    if not validate_session(request):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    template_path = TEMPLATES_DIR / template_name
-    if not template_path.exists() or template_path.parent != TEMPLATES_DIR:
-        raise HTTPException(status_code=404, detail="Template not found")
-    
-    template_path.unlink()
-    return {"success": True}
-
-@app.post("/api/sessions/{session_id}/template/select")
-async def select_template(session_id: str, request: Request, req: dict):
-    """Select a saved template for this session"""
-    if not validate_session(request) or get_session_id(request) != session_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    template_name = req.get("template_name", "")
-    template_path = TEMPLATES_DIR / template_name
-    if not template_path.exists() or template_path.parent != TEMPLATES_DIR:
-        return {"success": False, "error": "找不到該模板"}
-    
-    sessions[session_id]["template_name"] = template_name
-    return {"success": True, "filename": template_name}
+    return {"success": True, "filename": file.filename}
 
 @app.post("/api/sessions/{session_id}/segment")
 async def add_segment(session_id: str, req: AudioSegmentRequest, request: Request):
@@ -867,9 +694,8 @@ async def generate_report(session_id: str, request: Request, req: dict):
         summarized_text = full_text  # Fallback to original
     
     # If template exists, fill it
-    template_name = session.get("template_name")
-    template_path = str(TEMPLATES_DIR / template_name) if template_name and (TEMPLATES_DIR / template_name).exists() else None
-    if template_path and Path(template_path).exists():
+    template_path = str(TEMPLATES_DIR / "template.docx")
+    if Path(template_path).exists():
         try:
             docx_bytes = fill_template(
                 template_path,

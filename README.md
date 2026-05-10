@@ -58,7 +58,4 @@ uvicorn main:app --reload --port 8080
 | POST | `/api/sessions/{id}/generate` | 產生報告 |
 | GET | `/api/sessions/{id}/download` | 下載報告 |
 | POST | `/api/sessions/{id}/email` | Email 發送 |
-| POST | `/api/sessions/{id}/template` | 上傳 Word 模板（持久化儲存） |
-| POST | `/api/sessions/{id}/template/select` | 選取已儲存的模板 |
-| GET | `/api/templates` | 列出所有已儲存模板 |
-| DELETE | `/api/templates/{name}` | 刪除指定模板 |
+| POST | `/api/sessions/{id}/template` | 上傳 Word 模板（唯一一份，覆蓋舊的） |
