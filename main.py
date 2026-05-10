@@ -118,7 +118,7 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         # Set HF_TOKEN for faster model download
         if HF_TOKEN:
             os_module.environ["HF_TOKEN"] = HF_TOKEN
-        model = WhisperModel("base", device="cpu", compute_type="int8")
+        model = WhisperModel("small", device="cpu", compute_type="int8")
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             f.write(audio_bytes)
             temp_path = f.name
