@@ -22,6 +22,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from docx import Document
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 # =============================================================================
 # Configuration
@@ -245,32 +247,53 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
     report_date = datetime.now().strftime('%Y年%m月%d日')
     report_name = get_report_type_name(report_type)
     
-    def replace_in_element(element):
-        """Replace all placeholders in a text element (paragraph or table cell)"""
-        text = element.text
-        if "{{content}}" in text:
-            text = text.replace("{{content}}", full_text)
-        if "{{date}}" in text:
-            text = text.replace("{{date}}", report_date)
-        if "{{report_type}}" in text:
-            text = text.replace("{{report_type}}", report_name)
+    def replace_paragraph_text(para):
+        """Replace all placeholder text in a paragraph, handling runs properly"""
+        # Get all paragraph text by joining runs
+        full_para_text = ""
+        for run in para.runs:
+            full_para_text += run.text
+        
+        new_text = full_para_text
+        if "{{content}}" in new_text:
+            new_text = new_text.replace("{{content}}", full_text)
+            nonlocal content_replaced
+            content_replaced = True
+        if "{{date}}" in new_text:
+            new_text = new_text.replace("{{date}}", report_date)
+        if "{{report_type}}" in new_text:
+            new_text = new_text.replace("{{report_type}}", report_name)
         if fields_dict:
             for key, value in fields_dict.items():
                 placeholder = f"{{{{{key}}}}}"
-                if placeholder in text:
-                    text = text.replace(placeholder, str(value))
-        if text != element.text:
-            element.text = text
+                if placeholder in new_text:
+                    new_text = new_text.replace(placeholder, str(value))
+        
+        # Only modify if something changed
+        if new_text != full_para_text:
+            # Keep first run's formatting, clear all text, set new text in first run
+            for i, run in enumerate(para.runs):
+                if i == 0:
+                    run.text = new_text
+                else:
+                    run.text = ""
     
     # Replace in paragraphs
+    content_replaced = False
     for para in doc.paragraphs:
-        replace_in_element(para)
+        replace_paragraph_text(para)
     
-    # Replace in tables
+    # Replace in table cells
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
-                replace_in_element(cell)
+                for para in cell.paragraphs:
+                    replace_paragraph_text(para)
+    
+    # If no {{content}} placeholder was found, append content at end
+    if not content_replaced and full_text:
+        doc.add_paragraph("")
+        doc.add_paragraph(full_text)
     
     # Save to bytes
     buffer = io.BytesIO()
