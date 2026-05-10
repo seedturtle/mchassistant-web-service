@@ -655,8 +655,8 @@ async def generate_report(session_id: str, request: Request, req: dict):
         for i, seg in enumerate(session["segments"])
     ])
     
-    # Summarize with Hermes AI if API key is available
-    if HERMES_API_KEY:
+    # Summarize with MiniMax AI if API key is available
+    if MINIMAX_API_KEY:
         summarized_text = summarize_with_hermes(full_text, report_type)
     else:
         summarized_text = full_text  # Fallback to original
