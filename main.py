@@ -182,8 +182,12 @@ def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
         
         with urllib.request.urlopen(req, timeout=60) as resp:
             result = json.loads(resp.read().decode())
+            logging.warning(f"[summarize_with_hermes] MiniMax raw response: {str(result)[:500]}")
             if 'choices' in result and len(result['choices']) > 0:
-                return result['choices'][0]['message']['content'].strip()
+                content = result['choices'][0]['message']['content'].strip()
+                logging.warning(f"[summarize_with_hermes] Extracted content: {content[:200]}")
+                return content
+            logging.warning("[summarize_with_hermes] No choices in response, returning original")
             return transcribed_text
     except Exception as e:
         logging.error(f"MiniMax summarization error: {e}")
