@@ -31,8 +31,15 @@ UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 # Maton Gmail API (for sending emails)
-MATON_API_KEY = os.getenv("MATON_API_KEY", "v2.zlcGqf1ftNATtrNkwmXFa8snundIGVsq_5-fzjBn9BArZalW1bk5IiPZgK9TSyu5ADpZ4hM08OlBHHdPTstn5f4xdUoA9GikGmBmPIf2GGZcb5Nsa5mDOMgR")
+MATON_API_KEY=os.getenv("MATON_API_KEY", "")
 GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
+
+# Hermes AI API (for report summarization)
+HERMES_API_KEY=os.getenv("HERMES_API_KEY", "")
+HERMES_GATEWAY = "https://gateway.maton.ai/hermes/chat/completions"
+
+# HuggingFace token (for Faster Whisper model download)
+HF_TOKEN=os.getenv("HF_TOKEN", "")
 
 # Session storage
 # {session_id: {"report_type": str, "template_path": str, "segments": [], "created_at": datetime}}
@@ -107,6 +114,10 @@ def transcribe_audio(audio_bytes: bytes) -> str:
     """Transcribe audio using Faster Whisper (local)"""
     try:
         from faster_whisper import WhisperModel
+        import os as os_module
+        # Set HF_TOKEN for faster model download
+        if HF_TOKEN:
+            os_module.environ["HF_TOKEN"] = HF_TOKEN
         model = WhisperModel("base", device="cpu", compute_type="int8")
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             f.write(audio_bytes)
@@ -121,15 +132,72 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
-def fill_template(template_path: str, segments: list, report_type: str) -> bytes:
+def summarize_with_hermes(transcribed_text: str, report_type: str) -> str:
+    """Use Hermes AI to summarize and organize transcribed text into a professional report"""
+    if not HERMES_API_KEY:
+        # If no API key, return original text
+        return transcribed_text
+    
+    try:
+        import urllib.request
+        import urllib.error
+        
+        # Build the prompt based on report type
+        report_type_names = {
+            "general": "一般報告",
+            "medical": "醫療報告",
+            "meeting": "會議記錄",
+            "swallow": "吞嚥評估",
+            "ent": "耳鼻喉科報告"
+        }
+        type_name = report_type_names.get(report_type, "報告")
+        
+        system_prompt = """你是門諾醫院語音助理，專門幫醫師整理門診或會議記錄。
+
+請根據以下口語錄音內容，幫我：
+1. 修正明顯的語音辨識錯誤
+2. 把口語整理成正式的醫療報告格式
+3. 分類並結構化內容（主訴、現病史、理學檢查、診斷等）
+
+請用繁體中文回覆，直接輸出整理後的報告內容，不需要額外說明。"""
+
+        user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
+        
+        payload = json.dumps({
+            "model": "minimax/ Minimax",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.3,
+            "max_tokens": 4000
+        }).encode()
+        
+        req = urllib.request.Request(HERMES_GATEWAY, data=payload, method='POST')
+        req.add_header('Authorization', f'Bearer {HERMES_API_KEY}')
+        req.add_header('Content-Type', 'application/json')
+        
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode())
+            if 'choices' in result and len(result['choices']) > 0:
+                return result['choices'][0]['message']['content'].strip()
+            return transcribed_text
+    except Exception as e:
+        logging.error(f"Hermes summarization error: {e}")
+        return transcribed_text  # Fallback to original text if summarization fails
+
+def fill_template(template_path: str, segments: list, report_type: str, summarized_text: str = None) -> bytes:
     """Fill Word template with transcribed text"""
     doc = Document(template_path)
     
-    # Build content from all segments
-    full_text = "\n\n".join([
-        f"【段落{i+1}】\n{seg['transcription']}" 
-        for i, seg in enumerate(segments)
-    ])
+    # Use AI-summarized text if available, otherwise use original transcribed text
+    if summarized_text:
+        full_text = summarized_text
+    else:
+        full_text = "\n\n".join([
+            f"【段落{i+1}】\n{seg['transcription']}" 
+            for i, seg in enumerate(segments)
+        ])
     
     report_date = datetime.now().strftime('%Y年%m月%d日')
     report_name = get_report_type_name(report_type)
@@ -581,6 +649,18 @@ async def generate_report(session_id: str, request: Request, req: dict):
     report_type = req.get("report_type", "general")
     session["report_type"] = report_type
     
+    # Build full text from all segments
+    full_text = "\n\n".join([
+        f"【段落{i+1}】\n{seg['transcription']}" 
+        for i, seg in enumerate(session["segments"])
+    ])
+    
+    # Summarize with Hermes AI if API key is available
+    if HERMES_API_KEY:
+        summarized_text = summarize_with_hermes(full_text, report_type)
+    else:
+        summarized_text = full_text  # Fallback to original
+    
     # If template exists, fill it
     template_path = session.get("template_path") or last_template_path
     if template_path and Path(template_path).exists():
@@ -588,7 +668,8 @@ async def generate_report(session_id: str, request: Request, req: dict):
             docx_bytes = fill_template(
                 template_path,
                 session["segments"],
-                report_type
+                report_type,
+                summarized_text=summarized_text
             )
             session["generated_docx"] = docx_bytes
             session["template_path"] = template_path  # Save for future use
@@ -596,12 +677,8 @@ async def generate_report(session_id: str, request: Request, req: dict):
         except Exception as e:
             return {"success": False, "error": str(e)}
     else:
-        # No template - return text only
-        full_text = "\n\n".join([
-            f"【段落{i+1}】\n{seg['transcription']}"
-            for i, seg in enumerate(session["segments"])
-        ])
-        return {"success": True, "has_template": False, "text": full_text}
+        # No template - return summarized text only
+        return {"success": True, "has_template": False, "text": summarized_text}
 
 @app.get("/api/sessions/{session_id}/download")
 async def download_report(session_id: str, request: Request):
