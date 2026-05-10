@@ -13,7 +13,7 @@ import json
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -375,7 +375,7 @@ async def dashboard(request: Request):
             
             <div id="segments" class="segments-container"></div>
             
-            <button class="btn btn-secondary" id="addSegmentBtn" disabled>+ 新增段落</button>
+            <button class="btn btn-secondary" id="clearBtn">🗑 清空重置</button>
         </div>
         
         <div class="actions">
@@ -398,7 +398,7 @@ async def dashboard(request: Request):
     const recordBtn = document.getElementById('recordBtn');
     const status = document.getElementById('status');
     const segmentsDiv = document.getElementById('segments');
-    const addSegmentBtn = document.getElementById('addSegmentBtn');
+    const clearBtn = document.getElementById('clearBtn');
     const generateBtn = document.getElementById('generateBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const emailBtn = document.getElementById('emailBtn');
@@ -455,7 +455,6 @@ async def dashboard(request: Request):
                         if (data.success) {
                             segments.push({ id: data.segment_id, text: data.transcription });
                             renderSegments();
-                            addSegmentBtn.disabled = false;
                             checkGenerateReady();
                         }
                     } catch (e) {
@@ -487,9 +486,31 @@ async def dashboard(request: Request):
         generateBtn.disabled = !ready;
     }
     
-    addSegmentBtn.onclick = () => {
-        addSegmentBtn.disabled = true;
-        status.textContent = '點擊麥克風開始錄音';
+    clearBtn.onclick = async () => {
+        if (segments.length === 0) {
+            segments = [];
+            renderSegments();
+            status.textContent = '已清空';
+            return;
+        }
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json();
+            if (data.success) {
+                segments = [];
+                renderSegments();
+                downloadBtn.disabled = true;
+                emailBtn.disabled = true;
+                generateBtn.disabled = true;
+                status.textContent = '已清空重置';
+                document.getElementById('result').innerHTML = '';
+            }
+        } catch (e) {
+            alert('清除失敗：' + e.message);
+        }
     };
     
     generateBtn.onclick = async () => {
@@ -616,7 +637,7 @@ async def add_segment(session_id: str, req: AudioSegmentRequest, request: Reques
     try:
         future = executor.submit(do_transcribe)
         text = future.result(timeout=120)
-    except concurrent.futures.TimeoutError:
+    except TimeoutError:
         text = "[轉換失敗: 逾時]"
     except Exception as e:
         text = f"[轉換失敗: {str(e)}]"

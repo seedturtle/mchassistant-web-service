@@ -12,7 +12,7 @@ let recordingTimer = null;
 const recordBtn = document.getElementById('recordBtn');
 const status = document.getElementById('status');
 const segmentsDiv = document.getElementById('segments');
-const addSegmentBtn = document.getElementById('addSegmentBtn');
+const clearBtn = document.getElementById('clearBtn');
 const generateBtn = document.getElementById('generateBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const emailBtn = document.getElementById('emailBtn');
@@ -79,7 +79,6 @@ if (recordBtn) {
                             if (data.success) {
                                 segments.push({ id: data.segment_id, text: data.transcription });
                                 renderSegments();
-                                addSegmentBtn.disabled = false;
                                 checkGenerateReady();
                                 status.textContent = '錄音完成';
                             } else {
@@ -144,11 +143,33 @@ function checkGenerateReady() {
     generateBtn.disabled = segments.length === 0;
 }
 
-// Add Segment Button
-if (addSegmentBtn) {
-    addSegmentBtn.addEventListener('click', () => {
-        addSegmentBtn.disabled = true;
-        status.textContent = '點擊麥克風開始錄音';
+// Clear Button
+if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+        if (segments.length === 0) {
+            segments = [];
+            renderSegments();
+            status.textContent = '已清空';
+            return;
+        }
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json();
+            if (data.success) {
+                segments = [];
+                renderSegments();
+                downloadBtn.disabled = true;
+                emailBtn.disabled = true;
+                generateBtn.disabled = true;
+                status.textContent = '已清空重置';
+                if (result) result.innerHTML = '';
+            }
+        } catch (e) {
+            alert('清除失敗：' + e.message);
+        }
     });
 }
 
