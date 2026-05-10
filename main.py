@@ -751,12 +751,14 @@ async def generate_report(session_id: str, request: Request, req: dict):
     # Check if template has specific fields
     template_path = str(TEMPLATES_DIR / "template.docx")
     template_fields = []
+    template_usable = False
     if Path(template_path).exists():
         try:
             template_fields = extract_placeholders(template_path)
+            template_usable = True
             logging.warning(f"[Generate] Template fields found: {template_fields}")
         except Exception as e:
-            logging.error(f"[Generate] Failed to scan template: {e}")
+            logging.error(f"[Generate] Template corrupted, skipping: {e}")
     
     # Summarize with MiniMax AI
     api_key_preview = MINIMAX_API_KEY[:10] + "..." if MINIMAX_API_KEY else "EMPTY"
@@ -781,8 +783,8 @@ async def generate_report(session_id: str, request: Request, req: dict):
         logging.warning("[Generate] MINIMAX_API_KEY is empty - skipping AI summarization")
         summarized_text = full_text
     
-    # If template exists, fill it
-    if Path(template_path).exists():
+    # If template exists and is usable, fill it
+    if template_usable:
         try:
             docx_bytes = fill_template(
                 template_path,
@@ -794,7 +796,9 @@ async def generate_report(session_id: str, request: Request, req: dict):
             session["generated_docx"] = docx_bytes
             return {"success": True, "has_template": True}
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            logging.error(f"[Generate] Template fill failed, falling back: {e}")
+            session["generated_docx"] = None
+            return {"success": True, "has_template": False, "text": summarized_text}
     else:
         # No template - return summarized text only
         return {"success": True, "has_template": False, "text": summarized_text}
