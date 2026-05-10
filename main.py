@@ -10,9 +10,6 @@ import logging
 import base64
 import tempfile
 import json
-import email.message
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
