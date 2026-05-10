@@ -39,6 +39,10 @@ GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages
 sessions = {}
 executor = ThreadPoolExecutor(max_workers=2)
 
+# Last used template (for default template feature)
+last_template_path: Optional[str] = None
+last_template_name: Optional[str] = None
+
 # =============================================================================
 # Pydantic Models
 # =============================================================================
@@ -512,6 +516,11 @@ async def upload_template(session_id: str, request: Request, file: UploadFile = 
     sessions[session_id]["template_path"] = str(template_path)
     sessions[session_id]["template_name"] = file.filename
     
+    # Save as last used template
+    global last_template_path, last_template_name
+    last_template_path = str(template_path)
+    last_template_name = file.filename
+    
     return {"success": True, "filename": file.filename}
 
 @app.post("/api/sessions/{session_id}/segment")
@@ -573,14 +582,16 @@ async def generate_report(session_id: str, request: Request, req: dict):
     session["report_type"] = report_type
     
     # If template exists, fill it
-    if session["template_path"] and Path(session["template_path"]).exists():
+    template_path = session.get("template_path") or last_template_path
+    if template_path and Path(template_path).exists():
         try:
             docx_bytes = fill_template(
-                session["template_path"],
+                template_path,
                 session["segments"],
                 report_type
             )
             session["generated_docx"] = docx_bytes
+            session["template_path"] = template_path  # Save for future use
             return {"success": True, "has_template": True}
         except Exception as e:
             return {"success": False, "error": str(e)}
