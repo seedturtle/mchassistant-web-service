@@ -462,6 +462,9 @@ def _check_auto_complete(session_id: str):
         return
     if not session.get("auto_email", ""):
         return
+    # Already sent — don't send again (prevents double-send if user adds more files later)
+    if session.get("auto_email_sent", False):
+        return
     
     upload_files = session.get("upload_files", {})
     if not upload_files:
