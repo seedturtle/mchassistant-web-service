@@ -777,6 +777,7 @@ async def dashboard(request: Request):
     let hasTemplate = false;
     let SESSION_ID = '{session_id}';
     let recordingTimer = null;
+    let reportGenerated = false; // 產生報告後鎖定新增音訊
     let uploadPollTimer = null;
 
     function escapeHtml(text) {{
@@ -824,6 +825,10 @@ async def dashboard(request: Request):
 
     if (recordBtn) {{
         recordBtn.addEventListener('click', async () => {{
+            if (reportGenerated) {{
+                alert('📝 報告已產生，無法再新增錄音。請按「清空重置」或「新開工作」重新開始。');
+                return;
+            }}
             if (!isRecording) {{
                 try {{
                     const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
@@ -909,7 +914,8 @@ async def dashboard(request: Request):
                 if (data.success) {{
                     segments = []; renderSegments();
                     downloadBtn.disabled = true; emailBtn.disabled = true; generateBtn.disabled = true;
-                    status.textContent = '已清空重置';
+                    reportGenerated = false;
+                status.textContent = '已清空重置';
                     document.getElementById('result').innerHTML = '';
                     // Also clear upload display
                     document.getElementById('uploadResults').innerHTML = '';
@@ -931,8 +937,9 @@ async def dashboard(request: Request):
                 }});
                 const data = await res.json();
                 if (data.success) {{
-                    document.getElementById('result').innerHTML = '<div class="success">✓ 報告已產生！</div>';
+                    document.getElementById('result').innerHTML = '<div class="success">✓ 報告已產生！無法再新增錄音或上傳檔案。</div>';
                     downloadBtn.disabled = false; emailBtn.disabled = false;
+                    reportGenerated = true;
                 }} else {{
                     document.getElementById('result').innerHTML = '<div class="error">產生失敗：' + data.error + '</div>';
                 }}
@@ -978,7 +985,13 @@ async def dashboard(request: Request):
     const progressText = document.getElementById('progressText');
     const uploadResults = document.getElementById('uploadResults');
 
-    uploadBox.addEventListener('click', () => fileInput.click());
+    uploadBox.addEventListener('click', () => {{
+        if (reportGenerated) {{
+            alert('📝 報告已產生，無法再上傳新檔案。請按「清空重置」或「新開工作」重新開始。');
+            return;
+        }}
+        fileInput.click();
+    }});
 
     uploadBox.addEventListener('dragover', (e) => {{
         e.preventDefault(); uploadBox.classList.add('drag-over');
@@ -988,6 +1001,10 @@ async def dashboard(request: Request):
     }});
     uploadBox.addEventListener('drop', (e) => {{
         e.preventDefault(); uploadBox.classList.remove('drag-over');
+        if (reportGenerated) {{
+            alert('📝 報告已產生，無法再上傳新檔案。');
+            return;
+        }}
         if (e.dataTransfer.files.length > 0) {{
             fileInput.files = e.dataTransfer.files;
             handleFiles(fileInput.files);
@@ -995,6 +1012,10 @@ async def dashboard(request: Request):
     }});
 
     fileInput.addEventListener('change', () => {{
+        if (reportGenerated) {{
+            alert('📝 報告已產生，無法再上傳新檔案。');
+            return;
+        }}
         if (fileInput.files.length > 0) handleFiles(fileInput.files);
     }});
 
