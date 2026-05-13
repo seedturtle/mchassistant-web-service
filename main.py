@@ -627,9 +627,9 @@ async def dashboard(request: Request):
                 <li>🎤 按錄音鈕開始，再按一下停止，段落會自動列出</li>
                 <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選，每檔上限 50MB</li>
                 <li>🔄 錄音與上傳的音檔會累積在列表中，可混合使用</li>
-                <li>🚀 確認後按下「批次產出報告」，系統會自動進行語音辨識→AI彙整→產出Word報告</li>
-                <li>📧 如需背景自動寄送，上傳前先輸入 Email，完成後自動寄送到信箱</li>
-                <li>📥 也可手動下載或從「Email」按鈕寄送</li>
+                <li>⚡ 按下「即時處理」在頁面上觀看進度，完成後手動下載或寄送</li>
+                <li>📧 按下「背景處理並寄送」需先輸入 Email，完成後自動寄送到信箱，可關閉網頁</li>
+                <li>📥 處理完成後也可手動下載或按「手動寄送」</li>
                 <li>📄 可上傳 Word 模板（{{content}}、{{date}}、{{report_type}}），AI 內容自動填入</li>
             </ul>
         </div>
@@ -664,7 +664,7 @@ async def dashboard(request: Request):
             <h3>📁 上傳音檔</h3>
             <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 50MB</p>
             <div class="email-input-group">
-                <label for="emailInput">📧 背景自動寄送（選填）：輸入 Email，批次處理完成後自動寄送報告</label>
+                <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
                 <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
             </div>
             <div class="upload-box" id="uploadBox">
@@ -690,9 +690,10 @@ async def dashboard(request: Request):
         </div>
         
         <div class="actions">
-            <button class="btn btn-generate" id="generateBtn">🚀 批次產出報告</button>
+            <button class="btn btn-email-mode" id="bgEmailBtn">📧 背景處理並寄送</button>
+            <button class="btn btn-generate" id="generateBtn">⚡ 即時處理</button>
             <button class="btn btn-download" id="downloadBtn" disabled>📥 下載報告</button>
-            <button class="btn btn-email" id="emailBtn" disabled>📧 手動寄送 Email</button>
+            <button class="btn btn-email" id="emailBtn" disabled>📧 手動寄送</button>
         </div>
         
         <div id="result" class="result-box"></div>
@@ -737,6 +738,7 @@ async def dashboard(request: Request):
         document.getElementById('fileInput').disabled = disabled;
         document.getElementById('emailInput').disabled = disabled;
         document.getElementById('templateFile').disabled = disabled;
+        document.getElementById('bgEmailBtn').disabled = disabled;
         document.getElementById('generateBtn').disabled = disabled;
     }}
 
@@ -889,25 +891,68 @@ async def dashboard(request: Request):
     }}
 
     // ========== Generate Report ==========
-    document.getElementById('generateBtn').addEventListener('click', async function() {{
-        if (isProcessing) return;
-        // Refresh file list to make sure we have server-side state
-        await refreshFileList();
-        // Check if there are files
-        const listEl = document.getElementById('audioFileList');
-        if (!listEl || listEl.textContent.includes('尚無音檔')) {{
-            alert('請先錄音或上傳音檔'); return;
-        }}
-        
-        isProcessing = true;
-        disableInputsDuringProcessing(true);
-        document.getElementById('generateBtn').textContent = '⏳ 處理中...';
-        
+    function startProcessing(mode) {{
         document.getElementById('processingArea').style.display = 'block';
         document.getElementById('genProgressFill').style.width = '2%';
         document.getElementById('genProgressText').textContent = '啟動中...';
         document.getElementById('genResult').innerHTML = '';
         document.getElementById('genSegments').innerHTML = '';
+        
+        document.getElementById('bgEmailBtn').textContent = '⏳ 處理中...';
+        document.getElementById('generateBtn').textContent = '⏳ 處理中...';
+        
+        genPollTimer = setInterval(pollGenerateStatus, 3000);
+        
+        if (mode === 'bg') {{
+            document.getElementById('genProgressText').textContent = '📧 背景處理中，完成後將自動寄送至信箱（可關閉此頁）';
+        }} else {{
+            document.getElementById('genProgressText').textContent = '⚡ 即時處理中，請稍候...';
+        }}
+    }}
+
+    function stopProcessing() {{
+        if (genPollTimer) {{ clearInterval(genPollTimer); genPollTimer = null; }}
+        isProcessing = false;
+        disableInputsDuringProcessing(false);
+        document.getElementById('bgEmailBtn').textContent = '📧 背景處理並寄送';
+        document.getElementById('generateBtn').textContent = '⚡ 即時處理';
+    }}
+
+    // ========== 背景處理並寄送 ==========
+    document.getElementById('bgEmailBtn').addEventListener('click', async function() {{
+        if (isProcessing) return;
+        await refreshFileList();
+        const listEl = document.getElementById('audioFileList');
+        if (!listEl || listEl.textContent.includes('尚無音檔')) {{
+            alert('請先錄音或上傳音檔'); return;
+        }}
+        
+        const email = document.getElementById('emailInput').value.trim();
+        if (!email) {{
+            alert('請先輸入 Email 再使用背景處理並寄送');
+            document.getElementById('emailInput').focus();
+            return;
+        }}
+        
+        // Save email to server first by doing a dummy upload with just the email
+        // Actually, the upload endpoint also accepts email. Let's set it via a simple API call
+        // Use upload with empty files just to set the email... OR we can just pass it in the generate request
+        
+        // Simpler: set email by making a dummy API call
+        // The email is stored on the upload endpoint. Let me just set it.
+        // Actually, the /generate endpoint doesn't accept email. Let me store it directly.
+        const setRes = await fetch('/api/sessions/' + SESSION_ID + '/set-email', {{
+            method:'POST', headers:{{'Content-Type':'application/json'}},
+            body:JSON.stringify({{email: email}})
+        }});
+        const setData = await setRes.json();
+        if (!setData.success) {{
+            alert('設定 Email 失敗'); return;
+        }}
+        
+        isProcessing = true;
+        disableInputsDuringProcessing(true);
+        startProcessing('bg');
         
         try {{
             const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {{
@@ -915,20 +960,42 @@ async def dashboard(request: Request):
                 body:JSON.stringify({{report_type: document.getElementById('reportType').value}})
             }});
             const data = await res.json();
-            if (data.success) {{
-                document.getElementById('genProgressText').textContent = '🔄 背景處理中（可關閉此頁，完成後回來）';
-                genPollTimer = setInterval(pollGenerateStatus, 3000);
-            }} else {{
+            if (!data.success) {{
                 document.getElementById('genResult').innerHTML = '<div class="error">啟動失敗：' + escapeHtml(data.error) + '</div>';
-                isProcessing = false;
-                disableInputsDuringProcessing(false);
-                document.getElementById('generateBtn').textContent = '🚀 批次產出報告';
+                stopProcessing();
             }}
         }} catch(e) {{
             document.getElementById('genResult').innerHTML = '<div class="error">錯誤：' + escapeHtml(e.message) + '</div>';
-            isProcessing = false;
-            disableInputsDuringProcessing(false);
-            document.getElementById('generateBtn').textContent = '🚀 批次產出報告';
+            stopProcessing();
+        }}
+    }});
+
+    // ========== 即時處理 ==========
+    document.getElementById('generateBtn').addEventListener('click', async function() {{
+        if (isProcessing) return;
+        await refreshFileList();
+        const listEl = document.getElementById('audioFileList');
+        if (!listEl || listEl.textContent.includes('尚無音檔')) {{
+            alert('請先錄音或上傳音檔'); return;
+        }}
+        
+        isProcessing = true;
+        disableInputsDuringProcessing(true);
+        startProcessing('online');
+        
+        try {{
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {{
+                method:'POST', headers:{{'Content-Type':'application/json'}},
+                body:JSON.stringify({{report_type: document.getElementById('reportType').value}})
+            }});
+            const data = await res.json();
+            if (!data.success) {{
+                document.getElementById('genResult').innerHTML = '<div class="error">啟動失敗：' + escapeHtml(data.error) + '</div>';
+                stopProcessing();
+            }}
+        }} catch(e) {{
+            document.getElementById('genResult').innerHTML = '<div class="error">錯誤：' + escapeHtml(e.message) + '</div>';
+            stopProcessing();
         }}
     }});
 
@@ -940,7 +1007,8 @@ async def dashboard(request: Request):
         if (data.success) {{
             document.getElementById('downloadBtn').disabled = true;
             document.getElementById('emailBtn').disabled = true;
-            document.getElementById('generateBtn').textContent = '🚀 批次產出報告';
+            document.getElementById('bgEmailBtn').textContent = '📧 背景處理並寄送';
+            document.getElementById('generateBtn').textContent = '⚡ 即時處理';
             document.getElementById('result').innerHTML = '';
             document.getElementById('genResult').innerHTML = '';
             document.getElementById('processingArea').style.display = 'none';
@@ -988,6 +1056,23 @@ async def new_session(request: Request):
 # =============================================================================
 # Other API Endpoints
 # =============================================================================
+
+@app.post("/api/sessions/{session_id}/set-email")
+async def set_email(session_id: str, request: Request):
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    data = await request.json()
+    email = data.get("email", "")
+    if not email:
+        return {"success": False, "error": "Email 不得為空"}
+    sessions[session_id]["auto_email"] = email
+    sessions[session_id]["auto_email_sent"] = False
+    sessions[session_id]["auto_email_message"] = None
+    sessions[session_id]["auto_email_error"] = None
+    return {"success": True, "email": email}
+
 
 @app.get("/api/sessions/{session_id}/template")
 async def get_template_status(session_id: str, request: Request):
