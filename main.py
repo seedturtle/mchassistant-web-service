@@ -16,7 +16,7 @@ from typing import Optional, List
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
@@ -108,7 +108,11 @@ def get_or_create_session() -> str:
         "segments": [],
         "generated_docx": None,
         "created_at": datetime.now(),
-        "upload_files": {}  # {filename: {status, transcription, segment_id, error}}
+        "upload_files": {},  # {filename: {status, transcription, segment_id, error}}
+        "auto_email": "",    # email for auto-send mode
+        "auto_email_sent": False,
+        "auto_email_message": None,
+        "auto_email_error": None
     }
     return session_id
 
@@ -332,14 +336,150 @@ def extract_placeholders(doc_path: str) -> list:
     auto_fill = {"date", "report_type", "content"}
     return [p for p in placeholders if p not in auto_fill]
 
-def _process_uploaded_file(session_id: str, filepath: str, filename: str, ext: str):
-    """Background task: transcribe audio and store result in session"""
+# =============================================================================
+# Background Auto-Complete (Server-Side Generate + Email)
+# =============================================================================
+
+def _send_email_sync(session: dict, to_email: str) -> tuple:
+    """Send report email synchronously. Returns (success, message)."""
+    try:
+        import urllib.request
+        import urllib.error
+        
+        report_date = datetime.now().strftime('%Y年%m月%d日')
+        report_type_name = get_report_type_name(session.get("report_type", "general"))
+        
+        msg = MIMEMultipart('mixed')
+        msg['to'] = to_email
+        msg['subject'] = f"MCH {report_type_name} - {report_date}"
+        
+        body = f"""您好，
+
+這是由 MCH Assistant 產生的 {report_type_name}，日期：{report_date}。
+
+彙整報告已作為 Word 檔案 (.docx) 附加於此郵件中，請直接下載開啟。
+
+---
+此郵件由 MCH Assistant 自動發送
+"""
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        
+        if session.get("generated_docx"):
+            from email.mime.base import MIMEBase
+            from email import encoders
+            clean_date = report_date.replace("年", "").replace("月", "").replace("日", "")
+            filename = f"MCH_{report_type_name}_{clean_date}.docx"
+            
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
+            part.set_payload(session["generated_docx"])
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            msg.attach(part)
+        
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip('=')
+        
+        data = json.dumps({"raw": raw}).encode()
+        gmail_req = urllib.request.Request(GMAIL_GATEWAY, data=data, method='POST')
+        gmail_req.add_header('Authorization', f'Bearer {MATON_API_KEY}')
+        gmail_req.add_header('Content-Type', 'application/json')
+        
+        with urllib.request.urlopen(gmail_req, timeout=30) as resp:
+            return True, f"報告已自動寄送至 {to_email}"
+    except Exception as e:
+        logging.error(f"Auto email error: {e}")
+        return False, str(e)
+
+
+def _auto_generate_and_email(session_id: str):
+    """Auto-generate report and send email when all uploads complete."""
     session = sessions.get(session_id)
     if not session:
-        try:
-            os.unlink(filepath)
-        except:
-            pass
+        return
+    
+    target_email = session.get("auto_email", "")
+    if not target_email:
+        return
+    if not session["segments"]:
+        return
+    
+    try:
+        full_text = "\n\n".join([
+            f"【段落{i+1}】\n{seg['transcription']}"
+            for i, seg in enumerate(session["segments"])
+        ])
+        
+        report_type = session.get("report_type", "general")
+        
+        template_path = str(TEMPLATES_DIR / "template.docx")
+        template_fields = []
+        template_usable = False
+        if Path(template_path).exists():
+            try:
+                template_fields = extract_placeholders(template_path)
+                template_usable = True
+            except Exception:
+                pass
+        
+        fields_dict = None
+        summarized_text = None
+        
+        if MINIMAX_API_KEY:
+            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None)
+            if template_fields:
+                fields_dict = result
+            else:
+                summarized_text = result
+        else:
+            summarized_text = full_text
+        
+        if template_usable:
+            docx_bytes = fill_template(
+                template_path,
+                session["segments"],
+                report_type,
+                summarized_text=summarized_text,
+                fields_dict=fields_dict
+            )
+            session["generated_docx"] = docx_bytes
+        
+        success, msg = _send_email_sync(session, target_email)
+        if success:
+            session["auto_email_sent"] = True
+            session["auto_email_message"] = msg
+            logging.info(f"Auto-complete: email sent to {target_email} for session {session_id}")
+        else:
+            session["auto_email_error"] = msg
+            logging.error(f"Auto-complete: email failed for session {session_id}: {msg}")
+    except Exception as e:
+        logging.error(f"Auto-complete error for session {session_id}: {e}")
+        session["auto_email_error"] = str(e)
+
+
+def _check_auto_complete(session_id: str):
+    """Check if all uploads done, and trigger auto-generate+email if applicable."""
+    session = sessions.get(session_id)
+    if not session:
+        return
+    if not session.get("auto_email", ""):
+        return
+    
+    upload_files = session.get("upload_files", {})
+    if not upload_files:
+        return
+    
+    for info in upload_files.values():
+        if info.get("status") not in ("done", "error"):
+            return
+    
+    executor.submit(_auto_generate_and_email, session_id)
+
+
+def _process_uploaded_file(session_id: str, filepath: str, filename: str, ext: str):
+    """Background task: transcribe audio and store result in session."""
+    session = sessions.get(session_id)
+    if not session:
+        try: os.unlink(filepath)
+        except: pass
         return
     
     session["upload_files"][filename]["status"] = "processing"
@@ -367,104 +507,101 @@ def _process_uploaded_file(session_id: str, filepath: str, filename: str, ext: s
         session["upload_files"][filename]["status"] = "error"
         session["upload_files"][filename]["error"] = str(e)
     finally:
-        try:
-            os.unlink(filepath)
-        except:
-            pass
+        try: os.unlink(filepath)
+        except: pass
+        _check_auto_complete(session_id)
 
+
+# =============================================================================
+# API Endpoints
+# =============================================================================
 
 @app.post("/api/sessions/{session_id}/upload")
-async def upload_audio_files(session_id: str, request: Request, files: List[UploadFile] = File(...)):
-    """Upload audio files for background transcription (async, non-blocking)"""
+async def upload_audio_files(
+    session_id: str,
+    request: Request,
+    files: List[UploadFile] = File(...),
+    email: str = Form("")
+):
+    """Upload audio files for background transcription.
+    
+    If `email` is provided, the report will be auto-generated and emailed
+    when all files complete processing.
+    """
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
     if not files:
         return {"success": False, "error": "請選擇至少一個音檔"}
     
+    # Store auto-email if provided
+    if email:
+        sessions[session_id]["auto_email"] = email
+        sessions[session_id]["auto_email_sent"] = False
+        sessions[session_id]["auto_email_message"] = None
+        sessions[session_id]["auto_email_error"] = None
+    
     allowed_extensions = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac", ".aac", ".wma", ".opus"}
-    max_bytes = 50 * 1024 * 1024  # 50MB per file
+    max_bytes = 50 * 1024 * 1024
     results = []
     
     for file in files:
-        # Validate file extension
         ext = Path(file.filename).suffix.lower() if file.filename else ".webm"
         if ext not in allowed_extensions:
-            results.append({
-                "filename": file.filename,
-                "success": False,
-                "status": "error",
-                "error": f"不支援的格式: {ext}"
-            })
+            results.append({"filename": file.filename, "success": False, "status": "error", "error": f"不支援的格式: {ext}"})
             continue
         
         content = await file.read()
         
-        # Validate file size
         if len(content) > max_bytes:
             file_size_mb = len(content) / (1024 * 1024)
-            results.append({
-                "filename": file.filename,
-                "success": False,
-                "status": "error",
-                "error": f"檔案過大: {file_size_mb:.1f}MB，上限 50MB"
-            })
+            results.append({"filename": file.filename, "success": False, "status": "error", "error": f"檔案過大: {file_size_mb:.1f}MB，上限 50MB"})
             continue
         
-        # Save to disk for background processing
         safe_name = f"{session_id}_{uuid.uuid4().hex[:8]}{ext}"
         filepath = UPLOAD_DIR / safe_name
         with open(filepath, "wb") as f:
             f.write(content)
         
-        # Register in session with pending status
         sessions[session_id]["upload_files"][file.filename] = {
-            "status": "pending",
-            "transcription": None,
-            "segment_id": None,
-            "error": None
+            "status": "pending", "transcription": None, "segment_id": None, "error": None
         }
         
-        # Submit to background thread
         executor.submit(_process_uploaded_file, session_id, str(filepath), file.filename, ext)
-        
-        results.append({
-            "filename": file.filename,
-            "success": True,
-            "status": "pending"
-        })
+        results.append({"filename": file.filename, "success": True, "status": "pending"})
     
-    return {"success": True, "results": results}
+    return {"success": True, "results": results, "auto_email": email if email else None}
 
 
 @app.get("/api/sessions/{session_id}/upload-status")
 async def get_upload_status(session_id: str, request: Request):
-    """Get background upload processing status"""
+    """Get background upload processing status."""
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     files = sessions[session_id].get("upload_files", {})
-    
-    # Count statuses
     status_counts = {"pending": 0, "processing": 0, "done": 0, "error": 0}
     for fname, info in files.items():
         s = info.get("status", "pending")
         if s in status_counts:
             status_counts[s] += 1
     
+    s = sessions[session_id]
     return {
         "success": True,
         "files": files,
         "counts": status_counts,
         "total": len(files),
-        "all_done": status_counts["done"] + status_counts["error"] == len(files) if files else True
+        "all_done": status_counts["done"] + status_counts["error"] == len(files) if files else True,
+        "auto_email": s.get("auto_email") or None,
+        "auto_email_sent": s.get("auto_email_sent", False),
+        "auto_email_message": s.get("auto_email_message"),
+        "auto_email_error": s.get("auto_email_error")
     }
+
 
 # =============================================================================
 # Pages (HTML)
@@ -480,8 +617,6 @@ async def root(request: Request):
 async def login_page(request: Request):
     if validate_session(request):
         return RedirectResponse(url="/dashboard", status_code=302)
-    
-    # Inline HTML to avoid Jinja2 template issues
     html = """<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -517,30 +652,12 @@ async def login_page(request: Request):
             window.location.href = '/dashboard';
         } else {
             document.getElementById('error').style.display = 'block';
-            document.getElementById('password').value = '';
         }
     };
     </script>
 </body>
 </html>"""
     return HTMLResponse(content=html)
-
-@app.post("/api/auth/login")
-async def login(request_data: dict):
-    password = request_data.get("password", "")
-    if password != ACCESS_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid password")
-    
-    session_id = get_or_create_session()
-    response = RedirectResponse(url="/dashboard", status_code=302)
-    response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
-    return response
-
-@app.get("/api/auth/logout")
-async def logout():
-    response = RedirectResponse(url="/login", status_code=302)
-    response.delete_cookie("session_id")
-    return response
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -549,31 +666,29 @@ async def dashboard(request: Request):
     
     session_id = get_session_id(request)
     
-    # Inline dashboard HTML
-    html = """<!DOCTYPE html>
+    # Check if template exists
+    template_path = TEMPLATES_DIR / "template.docx"
+    has_template = template_path.exists()
+    
+    html = f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MCH Assistant - 語音助理</title>
+    <title>MCH Assistant - 儀表板</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
     <div class="header">
         <div class="logo">🏥 MCH Assistant</div>
         <div>
-            <span class="session-id">Session: """ + session_id + """</span>
-            <a href="/api/auth/logout" class="logout">登出</a>
+            <span class="session-id">Session: {session_id}</span>
+            <a href="/new" class="logout">🔄 新開工作</a>
         </div>
     </div>
     
     <div class="container">
-        <div class="nav">
-            <a href="/dashboard">🏠 主頁</a>
-            <a href="/new">➕ 新建報告</a>
-        </div>
-        
-        <h1>🎙️ 語音錄製</h1>
+        <h1>🎙️ 語音報告助理</h1>
         <p class="subtitle">分段錄音，完成後合併產生報告</p>
         
         <div class="card instructions-card">
@@ -585,8 +700,8 @@ async def dashboard(request: Request):
                 <li>🔄 錄音與上傳可混合使用，段落會累積，不限制次數</li>
                 <li>⏳ 上傳後的辨識在背景自動執行，可關閉網頁，完成後再回來查看</li>
                 <li>📋 上傳區會即時顯示每檔的處理狀態（等待中→辨識中→完成）</li>
+                <li>📧 背景模式下輸入 Email，所有檔案完成後自動產生報告並寄送至信箱</li>
                 <li>📥 所有段落都辨識完畢後，再按下「產生報告」</li>
-                <li>📥 報告產出成功後，可以下載或是以 Email 發送</li>
                 <li>📄 可上傳 Word 模板，AI 彙整內容會自動填入</li>
             </ul>
         </div>
@@ -616,15 +731,19 @@ async def dashboard(request: Request):
                 <button class="btn-record" id="recordBtn">🎤</button>
                 <div class="status" id="status">點擊麥克風開始錄音</div>
             </div>
-            
             <div id="segments" class="segments-container"></div>
-            
             <button class="btn btn-secondary" id="clearBtn">🗑 清空重置</button>
         </div>
         
         <div class="card upload-card">
             <h3>📁 上傳音檔</h3>
             <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 50MB</p>
+            
+            <div class="email-input-group">
+                <label for="emailInput">📧 背景模式（選填）：輸入 Email，完成後自動寄送報告</label>
+                <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
+            </div>
+            
             <div class="upload-box" id="uploadBox">
                 <div class="upload-icon">📂</div>
                 <div class="upload-text">點擊選擇檔案 或 拖放音檔到此處</div>
@@ -648,13 +767,48 @@ async def dashboard(request: Request):
     </div>
     
     <script>
-    const SESSION_ID = \"""" + session_id + """\";
     let mediaRecorder;
     let audioChunks = [];
     let isRecording = false;
     let segments = [];
     let hasTemplate = false;
-    
+    let SESSION_ID = '{session_id}';
+    let recordingTimer = null;
+    let uploadPollTimer = null;
+
+    function escapeHtml(text) {{
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }}
+
+    // Template Upload
+    const templateFile = document.getElementById('templateFile');
+    const templateStatus = document.getElementById('templateStatus');
+    if (templateFile) {{
+        templateFile.addEventListener('change', async () => {{
+            if (templateFile.files.length > 0) {{
+                const file = templateFile.files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('session_id', SESSION_ID);
+                try {{
+                    const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {{ method: 'POST', body: formData }});
+                    const data = await res.json();
+                    if (data.success) {{
+                        hasTemplate = true;
+                        templateStatus.innerHTML = '<span class="success">✓ 已儲存：' + data.filename + '</span>';
+                    }} else {{
+                        templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
+                    }}
+                }} catch (e) {{
+                    templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
+                }}
+            }}
+        }});
+    }}
+
+    // Recording
     const recordBtn = document.getElementById('recordBtn');
     const status = document.getElementById('status');
     const segmentsDiv = document.getElementById('segments');
@@ -662,355 +816,304 @@ async def dashboard(request: Request):
     const generateBtn = document.getElementById('generateBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const emailBtn = document.getElementById('emailBtn');
-    const templateFile = document.getElementById('templateFile');
-    const templateStatus = document.getElementById('templateStatus');
-    const templateOverwriteHint = document.getElementById('templateOverwriteHint');
     const reportType = document.getElementById('reportType');
     const result = document.getElementById('result');
-    
-    // Load template status on page load
-    async function loadTemplateStatus() {
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/template');
-            const data = await res.json();
-            if (data.success && data.has_template) {
-                hasTemplate = true;
-                templateStatus.innerHTML = '<span class="success">✓ 目前模板：' + data.filename + '</span>';
-                templateOverwriteHint.style.display = 'block';
-            } else {
-                hasTemplate = false;
-                templateStatus.innerHTML = '<span class="hint">目前無模板，可以上傳模板</span>';
-                templateOverwriteHint.style.display = 'none';
-            }
-        } catch (e) {
-            templateStatus.innerHTML = '<span class="hint">目前無模板，可以上傳模板</span>';
-        }
-    }
-    loadTemplateStatus();
-    
-    // Template upload — upload once, persists on server, re-upload overwrites
-    templateFile.onchange = async () => {
-        if (templateFile.files.length > 0) {
-            const file = templateFile.files[0];
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('session_id', SESSION_ID);
-            
-            try {
-                const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
-                    method: 'POST',
-                    body: formData
-                });
-                const data = await res.json();
-                if (data.success) {
-                    hasTemplate = true;
-                    templateStatus.innerHTML = '<span class="success">✓ 已儲存：' + data.filename + '</span>';
-                    templateOverwriteHint.style.display = 'block';
-                } else {
-                    templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
-                }
-            } catch (e) {
-                templateStatus.innerHTML = '<span class="error">上傳失敗</span>';
-            }
-        }
-    };
-    
-    recordBtn.onclick = async () => {
-        if (!isRecording) {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            audioChunks = [];
-            mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-            mediaRecorder.onstop = async () => {
-                const blob = new Blob(audioChunks, { type: 'audio/webm' });
-                const reader = new FileReader();
-                reader.readAsDataURL(blob);
-                reader.onloadend = async () => {
-                    const base64 = reader.result.split(',')[1];
-                    try {
-                        const res = await fetch('/api/sessions/' + SESSION_ID + '/segment', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ audio_data: base64, format: 'webm' })
-                        });
-                        const data = await res.json();
-                        if (data.success) {
-                            segments.push({ id: data.segment_id, text: data.transcription });
-                            renderSegments();
-                            checkGenerateReady();
-                        }
-                    } catch (e) {
-                        alert('轉換失敗');
-                    }
-                    stream.getTracks().forEach(t => t.stop());
-                };
-            };
-            mediaRecorder.start();
-            isRecording = true;
-            recordBtn.textContent = '⏹️';
-            status.textContent = '錄音中...';
-        } else {
-            mediaRecorder.stop();
-            isRecording = false;
-            recordBtn.textContent = '🎤';
-            status.textContent = '錄音完成';
-        }
-    };
-    
-    function renderSegments() {
-        segmentsDiv.innerHTML = segments.map((seg, i) => 
-            '<div class="segment-item"><strong>段落' + (i+1) + ':</strong> ' + seg.text + '</div>'
-        ).join('');
-    }
-    
-    function checkGenerateReady() {
-        const ready = segments.length > 0;
-        generateBtn.disabled = !ready;
-    }
-    
-    clearBtn.onclick = async () => {
-        if (segments.length === 0) {
-            segments = [];
-            renderSegments();
-            status.textContent = '已清空';
-            return;
-        }
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/clear', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const data = await res.json();
-            if (data.success) {
-                segments = [];
-                renderSegments();
-                downloadBtn.disabled = true;
-                emailBtn.disabled = true;
-                generateBtn.disabled = true;
-                status.textContent = '已清空重置';
-                document.getElementById('result').innerHTML = '';
-            }
-        } catch (e) {
-            alert('清除失敗：' + e.message);
-        }
-    };
-    
-    generateBtn.onclick = async () => {
-        generateBtn.textContent = '處理中...';
-        generateBtn.disabled = true;
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ report_type: reportType.value })
-            });
-            const data = await res.json();
-            if (data.success) {
-                result.innerHTML = '<div class="success">✓ 報告已產生！</div>';
-                downloadBtn.disabled = false;
-                emailBtn.disabled = false;
-            } else {
-                result.innerHTML = '<div class="error">產生失敗：' + data.error + '</div>';
-            }
-        } catch (e) {
-            result.innerHTML = '<div class="error">錯誤：' + e.message + '</div>';
-        }
-        generateBtn.textContent = '📝 產生報告';
-        generateBtn.disabled = false;
-    };
-    
-    downloadBtn.onclick = () => {
-        window.location.href = '/api/sessions/' + SESSION_ID + '/download';
-    };
-    
-    emailBtn.onclick = async () => {
-        const email = prompt('請輸入收件者 Email:');
-        if (email) {
-            emailBtn.textContent = '發送中...';
-            emailBtn.disabled = true;
-            try {
-                const res = await fetch('/api/sessions/' + SESSION_ID + '/email', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to_email: email })
-                });
-                const data = await res.json();
-                if (data.success) {
-                    alert('✓ 郵件已發送至 ' + email);
-                } else {
-                    alert('發送失敗：' + data.error);
-                }
-            } catch (e) {
-                alert('錯誤：' + e.message);
-            }
-            emailBtn.textContent = '📧 Email';
-            emailBtn.disabled = false;
-        }
-    };
 
-    // ========== File Upload ==========
+    if (recordBtn) {{
+        recordBtn.addEventListener('click', async () => {{
+            if (!isRecording) {{
+                try {{
+                    const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+                    mediaRecorder = new MediaRecorder(stream);
+                    audioChunks = [];
+                    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+                    mediaRecorder.onstop = async () => {{
+                        const blob = new Blob(audioChunks, {{ type: 'audio/webm' }});
+                        const reader = new FileReader();
+                        reader.readAsDataURL(blob);
+                        reader.onloadend = async () => {{
+                            const base64 = reader.result.split(',')[1];
+                            try {{
+                                status.textContent = '轉換中...';
+                                const res = await fetch('/api/sessions/' + SESSION_ID + '/segment', {{
+                                    method: 'POST',
+                                    headers: {{ 'Content-Type': 'application/json' }},
+                                    body: JSON.stringify({{ audio_data: base64, format: 'webm' }})
+                                }});
+                                const data = await res.json();
+                                if (data.success) {{
+                                    segments.push({{ id: data.segment_id, text: data.transcription }});
+                                    renderSegments();
+                                    checkGenerateReady();
+                                    status.textContent = '錄音完成';
+                                }} else {{
+                                    alert('轉換失敗');
+                                    status.textContent = '轉換失敗';
+                                }}
+                            }} catch (e) {{
+                                alert('錯誤：' + e.message);
+                                status.textContent = '錯誤';
+                            }}
+                            clearInterval(recordingTimer);
+                            stream.getTracks().forEach(t => t.stop());
+                        }};
+                    }};
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.textContent = '⏹️';
+                    let remaining = 300;
+                    recordingTimer = setInterval(() => {{
+                        remaining--;
+                        const mins = Math.floor(remaining / 60);
+                        const secs = remaining % 60;
+                        status.textContent = '錄音中... 再次點擊停止（還有 ' + mins + ':' + secs.toString().padStart(2, '0') + '）';
+                        if (remaining <= 0) {{
+                            mediaRecorder.stop();
+                            clearInterval(recordingTimer);
+                        }}
+                    }}, 1000);
+                }} catch (e) {{
+                    alert('無法存取麥克風：' + e.message);
+                }}
+            }} else {{
+                mediaRecorder.stop();
+                isRecording = false;
+                recordBtn.textContent = '🎤';
+            }}
+        }});
+    }}
+
+    function renderSegments() {{
+        if (!segmentsDiv) return;
+        segmentsDiv.innerHTML = segments.map((seg, i) => 
+            '<div class="segment-item"><strong>段落' + (i+1) + ':</strong><br>' + escapeHtml(seg.text) + '</div>'
+        ).join('');
+    }}
+
+    function checkGenerateReady() {{
+        if (!generateBtn) return;
+        generateBtn.disabled = segments.length === 0;
+    }}
+
+    if (clearBtn) {{
+        clearBtn.onclick = async () => {{
+            if (segments.length === 0) {{
+                segments = []; renderSegments(); status.textContent = '已清空'; return;
+            }}
+            try {{
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/clear', {{ method: 'POST', headers: {{ 'Content-Type': 'application/json' }} }});
+                const data = await res.json();
+                if (data.success) {{
+                    segments = []; renderSegments();
+                    downloadBtn.disabled = true; emailBtn.disabled = true; generateBtn.disabled = true;
+                    status.textContent = '已清空重置';
+                    document.getElementById('result').innerHTML = '';
+                    // Also clear upload display
+                    document.getElementById('uploadResults').innerHTML = '';
+                    document.getElementById('uploadProgress').style.display = 'none';
+                    if (uploadPollTimer) {{ clearInterval(uploadPollTimer); uploadPollTimer = null; }}
+                }}
+            }} catch (e) {{ alert('清除失敗：' + e.message); }}
+        }};
+    }}
+
+    if (generateBtn) {{
+        generateBtn.addEventListener('click', async () => {{
+            generateBtn.textContent = '處理中...'; generateBtn.disabled = true;
+            try {{
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ report_type: reportType ? reportType.value : 'general' }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    document.getElementById('result').innerHTML = '<div class="success">✓ 報告已產生！</div>';
+                    downloadBtn.disabled = false; emailBtn.disabled = false;
+                }} else {{
+                    document.getElementById('result').innerHTML = '<div class="error">產生失敗：' + data.error + '</div>';
+                }}
+            }} catch (e) {{
+                document.getElementById('result').innerHTML = '<div class="error">錯誤：' + e.message + '</div>';
+            }}
+            generateBtn.textContent = '📝 產生報告'; generateBtn.disabled = false;
+        }});
+    }}
+
+    if (downloadBtn) {{
+        downloadBtn.addEventListener('click', () => {{
+            window.location.href = '/api/sessions/' + SESSION_ID + '/download';
+        }});
+    }}
+
+    if (emailBtn) {{
+        emailBtn.addEventListener('click', async () => {{
+            const email = prompt('請輸入收件者 Email:');
+            if (email) {{
+                emailBtn.textContent = '發送中...'; emailBtn.disabled = true;
+                try {{
+                    const res = await fetch('/api/sessions/' + SESSION_ID + '/email', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{ to_email: email }})
+                    }});
+                    const data = await res.json();
+                    if (data.success) {{ alert('✓ 郵件已發送至 ' + email); }}
+                    else {{ alert('發送失敗：' + data.error); }}
+                }} catch (e) {{ alert('錯誤：' + e.message); }}
+                emailBtn.textContent = '📧 Email'; emailBtn.disabled = false;
+            }}
+        }});
+    }}
+
+    // ========== File Upload (Background Mode) ==========
     const uploadBox = document.getElementById('uploadBox');
     const fileInput = document.getElementById('fileInput');
+    const emailInput = document.getElementById('emailInput');
     const uploadProgress = document.getElementById('uploadProgress');
     const progressFill = document.getElementById('progressFill');
     const progressText = document.getElementById('progressText');
     const uploadResults = document.getElementById('uploadResults');
 
-    // Click to select files
     uploadBox.addEventListener('click', () => fileInput.click());
 
-    // Drag & drop
-    uploadBox.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        uploadBox.classList.add('drag-over');
-    });
-    uploadBox.addEventListener('dragleave', () => {
+    uploadBox.addEventListener('dragover', (e) => {{
+        e.preventDefault(); uploadBox.classList.add('drag-over');
+    }});
+    uploadBox.addEventListener('dragleave', () => {{
         uploadBox.classList.remove('drag-over');
-    });
-    uploadBox.addEventListener('drop', (e) => {
-        e.preventDefault();
-        uploadBox.classList.remove('drag-over');
-        if (e.dataTransfer.files.length > 0) {
+    }});
+    uploadBox.addEventListener('drop', (e) => {{
+        e.preventDefault(); uploadBox.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) {{
             fileInput.files = e.dataTransfer.files;
             handleFiles(fileInput.files);
-        }
-    });
+        }}
+    }});
 
-    // File selected via dialog
-    fileInput.addEventListener('change', () => {
-        if (fileInput.files.length > 0) {
-            handleFiles(fileInput.files);
-        }
-    });
+    fileInput.addEventListener('change', () => {{
+        if (fileInput.files.length > 0) handleFiles(fileInput.files);
+    }});
 
-    let uploadPollTimer = null;
-
-    function renderFileStatus(fileInfo, filename) {
-        const statusMap = {
-            'pending': '<span class="badge-pending">⏳ 等待中</span>',
-            'processing': '<span class="badge-processing">🔄 辨識中</span>',
-            'done': '<span class="badge-done">✅ 完成</span>',
-            'error': '<span class="badge-error">❌ 失敗</span>'
-        };
-        const badge = statusMap[fileInfo.status] || statusMap['pending'];
+    function renderFileStatus(fileInfo, filename) {{
+        const badges = {{ 'pending': '<span class="badge-pending">⏳ 等待中</span>', 'processing': '<span class="badge-processing">🔄 辨識中</span>', 'done': '<span class="badge-done">✅ 完成</span>', 'error': '<span class="badge-error">❌ 失敗</span>' }};
+        const badge = badges[fileInfo.status] || badges['pending'];
         let extra = '';
-        if (fileInfo.status === 'done' && fileInfo.transcription) {
+        if (fileInfo.status === 'done' && fileInfo.transcription) {{
             extra = '<div class="file-preview">' + escapeHtml(fileInfo.transcription.substring(0, 80)) + (fileInfo.transcription.length > 80 ? '...' : '') + '</div>';
-        } else if (fileInfo.status === 'error') {
+        }} else if (fileInfo.status === 'error') {{
             extra = '<div class="file-error-text">' + escapeHtml(fileInfo.error || '未知錯誤') + '</div>';
-        }
-        return '<div class="file-status-item status-' + fileInfo.status + '">' +
-            '<div class="file-status-header">' + badge + ' <span class="result-filename">' + escapeHtml(filename) + '</span></div>' +
-            extra + '</div>';
-    }
+        }}
+        return '<div class="file-status-item status-' + fileInfo.status + '"><div class="file-status-header">' + badge + ' <span class="result-filename">' + escapeHtml(filename) + '</span></div>' + extra + '</div>';
+    }}
 
-    function renderUploadPanel(files) {
+    function renderUploadPanel(files) {{
         let html = '';
-        for (const [fname, info] of Object.entries(files)) {
+        for (const [fname, info] of Object.entries(files)) {{
             html += renderFileStatus(info, fname);
-        }
+        }}
         uploadResults.innerHTML = html;
-    }
+    }}
 
-    async function pollUploadStatus() {
-        try {
+    async function pollUploadStatus() {{
+        try {{
             const res = await fetch('/api/sessions/' + SESSION_ID + '/upload-status');
             const data = await res.json();
             if (!data.success) return;
 
             renderUploadPanel(data.files);
-
-            // Update progress
             const done = data.counts.done + data.counts.error;
             const total = data.total;
             const pct = total > 0 ? Math.round(done / total * 100) : 0;
             progressFill.style.width = pct + '%';
 
-            if (data.all_done) {
-                progressText.textContent = '✓ ' + done + '/' + total + ' 處理完成';
-                if (uploadPollTimer) {
-                    clearInterval(uploadPollTimer);
-                    uploadPollTimer = null;
-                }
-                // Rebuild segments from completed uploads + check generate readiness
+            if (data.all_done) {{
+                progressFill.style.width = '100%';
+                if (data.auto_email_sent) {{
+                    progressText.textContent = '✓ 報告已自動寄送至 ' + data.auto_email;
+                    status.textContent = '✅ 報告已寄送，請查看信箱';
+                }} else if (data.auto_email_error) {{
+                    progressText.textContent = '⚠️ 辨識完成，但自動寄信失敗';
+                    status.textContent = '⚠️ 辨識完成，Email 發送失敗：' + data.auto_email_error + '（請手動下載或寄送）';
+                }} else if (data.auto_email) {{
+                    progressText.textContent = '✓ ' + done + '/' + total + ' 處理完成，正準備寄送報告...';
+                }} else {{
+                    progressText.textContent = '✓ ' + done + '/' + total + ' 處理完成';
+                    status.textContent = '✓ ' + segments.length + ' 個段落辨識完成，可產生報告';
+                }}
+
+                if (uploadPollTimer) {{ clearInterval(uploadPollTimer); uploadPollTimer = null; }}
+
+                // Rebuild segments from completed uploads
                 segments = [];
-                for (const [fname, info] of Object.entries(data.files)) {
-                    if (info.status === 'done' && info.segment_id) {
-                        segments.push({ id: info.segment_id, text: info.transcription });
-                    }
-                }
+                for (const [fname, info] of Object.entries(data.files)) {{
+                    if (info.status === 'done' && info.segment_id) {{
+                        segments.push({{ id: info.segment_id, text: info.transcription }});
+                    }}
+                }}
                 renderSegments();
                 checkGenerateReady();
-                status.textContent = '✓ ' + segments.length + ' 個段落辨識完成（可關閉此頁，回來繼續操作）';
-            } else {
+            }} else {{
                 progressText.textContent = '處理中 ' + done + '/' + total + '（可關閉此頁，完成後回來查看）';
                 status.textContent = '🔄 語音辨識背景處理中...';
-            }
-        } catch (e) {
-            // Silently retry on next poll
-        }
-    }
+            }}
+        }} catch (e) {{}}
+    }}
 
-    async function handleFiles(files) {
+    async function handleFiles(files) {{
         const MAX_MB = 50;
-        // Frontend check: file size limit
-        for (const file of files) {
-            if (file.size > MAX_MB * 1024 * 1024) {
+        for (const file of files) {{
+            if (file.size > MAX_MB * 1024 * 1024) {{
                 uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> <span class="result-filename">' + escapeHtml(file.name) + '</span> 超過 ' + MAX_MB + 'MB 限制（' + (file.size / 1024 / 1024).toFixed(1) + 'MB）</div>';
                 status.textContent = '❌ 部分檔案超過大小限制';
                 return;
-            }
-        }
-        
-        const formData = new FormData();
-        for (const file of files) {
-            formData.append('files', file);
-        }
+            }}
+        }}
 
-        // Show progress area
+        const formData = new FormData();
+        for (const file of files) {{
+            formData.append('files', file);
+        }}
+        // Include email if filled
+        const userEmail = emailInput ? emailInput.value.trim() : '';
+        if (userEmail) {{
+            formData.append('email', userEmail);
+        }}
+
         uploadProgress.style.display = 'block';
         progressFill.style.width = '5%';
         progressText.textContent = '正在上傳 ' + files.length + ' 個檔案...';
         uploadResults.innerHTML = '';
 
-        try {
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/upload', {
-                method: 'POST',
-                body: formData
-            });
+        try {{
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/upload', {{ method: 'POST', body: formData }});
             const data = await res.json();
 
-            if (data.success) {
+            if (data.success) {{
                 progressFill.style.width = '10%';
-                progressText.textContent = '已接收，背景辨識中...';
-                status.textContent = '🔄 語音辨識背景處理中，可關閉此頁...';
+                const modeMsg = userEmail ? '，完成後自動寄送至 ' + userEmail : '，可關閉此頁';
+                progressText.textContent = '已接收，背景辨識中' + modeMsg;
+                status.textContent = '🔄 語音辨識背景處理中' + modeMsg;
 
-                // Initial render
-                const initFiles = {};
-                data.results.forEach(r => {
-                    if (r.success) {
-                        initFiles[r.filename] = { status: 'pending', transcription: null, segment_id: null, error: null };
-                    } else {
-                        initFiles[r.filename] = { status: 'error', error: r.error };
-                    }
-                });
+                const initFiles = {{}};
+                data.results.forEach(r => {{
+                    if (r.success) {{ initFiles[r.filename] = {{ status: 'pending', transcription: null, segment_id: null, error: null }}; }}
+                    else {{ initFiles[r.filename] = {{ status: 'error', error: r.error }}; }}
+                }});
                 renderUploadPanel(initFiles);
 
-                // Start polling
                 if (uploadPollTimer) clearInterval(uploadPollTimer);
                 uploadPollTimer = setInterval(pollUploadStatus, 2500);
-            } else {
+            }} else {{
                 uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> 上傳失敗：' + escapeHtml(data.error || '未知錯誤') + '</div>';
-            }
-        } catch (e) {
+            }}
+        }} catch (e) {{
             progressFill.style.width = '0%';
             progressText.textContent = '上傳錯誤';
             uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> 錯誤：' + escapeHtml(e.message) + '</div>';
-        }
-
-        // Reset file input
+        }}
         fileInput.value = '';
-    }
+    }}
     </script>
 </body>
 </html>"""
@@ -1021,127 +1124,107 @@ async def new_session(request: Request):
     """Create new session"""
     if not validate_session(request):
         return RedirectResponse(url="/login", status_code=302)
-    
-    # Create new session
     new_id = get_or_create_session()
     response = RedirectResponse(url="/dashboard", status_code=302)
     response.set_cookie(key="session_id", value=new_id, httponly=True, samesite="lax")
     return response
 
 # =============================================================================
-# API Endpoints
+# API Endpoints (Auth, Recordings, Generate, Download, Email)
 # =============================================================================
 
 @app.get("/api/sessions/{session_id}/template")
 async def get_template_status(session_id: str, request: Request):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     template_path = TEMPLATES_DIR / "template.docx"
-    if template_path.exists():
-        return {"success": True, "has_template": True, "filename": "template.docx"}
-    else:
-        return {"success": True, "has_template": False}
+    return {"exists": template_path.exists()}
 
 @app.post("/api/sessions/{session_id}/template")
 async def upload_template(session_id: str, request: Request, file: UploadFile = File(...)):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
     if not file.filename.endswith('.docx'):
-        return {"success": False, "error": "請上傳 .docx 檔案"}
-    
-    # Save as the one persistent template (overwrite previous)
+        raise HTTPException(status_code=400, detail="Only .docx files are accepted")
+    content = await file.read()
     template_path = TEMPLATES_DIR / "template.docx"
     with open(template_path, "wb") as f:
-        content = await file.read()
         f.write(content)
-    
     return {"success": True, "filename": file.filename}
 
+@app.post("/api/auth/login")
+async def login(request: Request):
+    data = await request.json()
+    if data.get("password") == ACCESS_PASSWORD:
+        session_id = get_or_create_session()
+        response = JSONResponse({"success": True})
+        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
+        return response
+    raise HTTPException(status_code=401, detail="Invalid password")
+
 @app.post("/api/sessions/{session_id}/segment")
-async def add_segment(session_id: str, req: AudioSegmentRequest, request: Request):
+async def add_segment(session_id: str, request: Request, seg: AudioSegmentRequest):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Decode audio
-    audio_bytes = base64.b64decode(req.audio_data)
+    audio_bytes = base64.b64decode(seg.audio_data)
     
-    # Save audio
-    segment_id = str(uuid.uuid4())[:8]
-    audio_path = UPLOAD_DIR / f"{session_id}_{segment_id}.webm"
-    with open(audio_path, "wb") as f:
-        f.write(audio_bytes)
-    
-    # Transcribe in background thread
     def do_transcribe():
         return transcribe_audio(audio_bytes)
     
     try:
         future = executor.submit(do_transcribe)
-        text = future.result(timeout=120)
+        text = future.result(timeout=180)
     except TimeoutError:
         text = "[轉換失敗: 逾時]"
     except Exception as e:
         text = f"[轉換失敗: {str(e)}]"
     
-    # Store segment
+    segment_id = str(uuid.uuid4())[:8]
     sessions[session_id]["segments"].append({
         "id": segment_id,
         "transcription": text,
-        "audio_path": str(audio_path)
+        "audio_path": None
     })
     
-    return {
-        "success": True,
-        "segment_id": segment_id,
-        "transcription": text
-    }
+    return {"success": True, "segment_id": segment_id, "transcription": text}
 
 @app.post("/api/sessions/{session_id}/clear")
 async def clear_session(session_id: str, request: Request):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Clear segments + upload files
     sessions[session_id]["segments"] = []
     sessions[session_id]["generated_docx"] = None
     sessions[session_id]["upload_files"] = {}
-    
+    sessions[session_id]["auto_email"] = ""
+    sessions[session_id]["auto_email_sent"] = False
+    sessions[session_id]["auto_email_message"] = None
+    sessions[session_id]["auto_email_error"] = None
     return {"success": True}
 
 @app.post("/api/sessions/{session_id}/generate")
 async def generate_report(session_id: str, request: Request, req: dict):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[session_id]
-    
     if not session["segments"]:
         return {"success": False, "error": "尚無錄音內容"}
     
     report_type = req.get("report_type", "general")
     session["report_type"] = report_type
     
-    # Build full text from all segments
     full_text = "\n\n".join([
         f"【段落{i+1}】\n{seg['transcription']}" 
         for i, seg in enumerate(session["segments"])
     ])
     
-    # Check if template has specific fields
     template_path = str(TEMPLATES_DIR / "template.docx")
     template_fields = []
     template_usable = False
@@ -1149,34 +1232,21 @@ async def generate_report(session_id: str, request: Request, req: dict):
         try:
             template_fields = extract_placeholders(template_path)
             template_usable = True
-            logging.warning(f"[Generate] Template fields found: {template_fields}")
         except Exception as e:
             logging.error(f"[Generate] Template corrupted, skipping: {e}")
-    
-    # Summarize with MiniMax AI
-    api_key_preview = MINIMAX_API_KEY[:10] + "..." if MINIMAX_API_KEY else "EMPTY"
-    logging.warning(f"[Generate] MINIMAX_API_KEY: {api_key_preview}, length: {len(MINIMAX_API_KEY) if MINIMAX_API_KEY else 0}")
     
     fields_dict = None
     summarized_text = None
     
     if MINIMAX_API_KEY:
-        logging.warning(f"[Generate] Calling MiniMax API with placeholders={template_fields}")
         result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None)
-        
         if template_fields:
-            # Structured mode — MiniMax returned a dict
             fields_dict = result
-            logging.warning(f"[Generate] MiniMax returned fields: {list(fields_dict.keys()) if fields_dict else 'none'}")
         else:
-            # Free mode — MiniMax returned a string
             summarized_text = result
-            logging.warning(f"[Generate] MiniMax returned {len(summarized_text)} chars")
     else:
-        logging.warning("[Generate] MINIMAX_API_KEY is empty - skipping AI summarization")
         summarized_text = full_text
     
-    # If template exists and is usable, fill it
     if template_usable:
         try:
             docx_bytes = fill_template(
@@ -1193,40 +1263,28 @@ async def generate_report(session_id: str, request: Request, req: dict):
             session["generated_docx"] = None
             return {"success": True, "has_template": False, "text": summarized_text}
     else:
-        # No template - return summarized text only
         return {"success": True, "has_template": False, "text": summarized_text}
 
 @app.get("/api/sessions/{session_id}/download")
 async def download_report(session_id: str, request: Request):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[session_id]
-    
     if session.get("generated_docx"):
         return Response(
             content=session["generated_docx"],
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''MCH_%E5%A0%B1%E5%91%8A_{datetime.now().strftime('%Y%m%d')}.docx"
-            }
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''MCH_報名_{datetime.now().strftime('%Y%m%d')}.docx"}
         )
     elif session["segments"]:
-        # Return text if no docx
         full_text = "\n\n".join([
-            f"【段落{i+1}】\n{seg['transcription']}"
-            for i, seg in enumerate(session["segments"])
+            f"【段落{i+1}】\n{seg['transcription']}" for i, seg in enumerate(session["segments"])
         ])
-        return Response(
-            content=full_text,
-            media_type="text/plain; charset=utf-8",
-            headers={
-                "Content-Disposition": f"attachment; filename*=UTF-8''MCH_%E5%A0%B1%E5%91%8A_{datetime.now().strftime('%Y%m%d')}.txt"
-            }
-        )
+        return Response(content=full_text, media_type="text/plain; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''MCH_報名_{datetime.now().strftime('%Y%m%d')}.txt"})
     else:
         raise HTTPException(status_code=404, detail="No report to download")
 
@@ -1234,82 +1292,18 @@ async def download_report(session_id: str, request: Request):
 async def email_report(session_id: str, request: Request, req: EmailRequest):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
     session = sessions[session_id]
-    
     if not session.get("generated_docx") and not session["segments"]:
         return {"success": False, "error": "無報告可發送"}
     
-    try:
-        import urllib.request
-        import urllib.error
-        
-        # Build email content
-        report_date = datetime.now().strftime('%Y年%m月%d日')
-        report_type_name = get_report_type_name(session.get("report_type", "general"))
-        
-        # Try to get summarized text from segments or build a cleaner body
-        # Build a cleaner body using all segments (but without the 【段落】 markers)
-        body_lines = []
-        for i, seg in enumerate(session["segments"]):
-            body_lines.append(f"【記錄 {i+1}】\n{seg['transcription']}")
-        segment_text = "\n\n".join(body_lines)
-        
-        # Create email
-        msg = MIMEMultipart('mixed')
-        msg['to'] = req.to_email
-        msg['subject'] = f"MCH {report_type_name} - {report_date}"
-        
-        # Email body (brief intro + mention attachment)
-        body = f"""您好，
-
-這是由 MCH Assistant 產生的 {report_type_name}，日期：{report_date}。
-
-彙整報告已作為 Word 檔案 (.docx) 附加於此郵件中，請直接下載開啟。
-
----
-此郵件由 MCH Assistant 自動發送
-"""
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        
-        # Attach the Word docx if available
-        if session.get("generated_docx"):
-            from email.mime.base import MIMEBase
-            from email import encoders
-            clean_date = report_date.replace("年", "").replace("月", "").replace("日", "")
-            filename = f"MCH_{report_type_name}_{clean_date}.docx"
-            
-            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
-            part.set_payload(session["generated_docx"])
-            encoders.encode_base64(part)
-            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
-            msg.attach(part)
-        
-        # Encode to base64url
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip('=')
-        
-        # Send via Maton Gmail API
-        data = json.dumps({"raw": raw}).encode()
-        gmail_req = urllib.request.Request(GMAIL_GATEWAY, data=data, method='POST')
-        gmail_req.add_header('Authorization', f'Bearer {MATON_API_KEY}')
-        gmail_req.add_header('Content-Type', 'application/json')
-        
-        with urllib.request.urlopen(gmail_req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            return {
-                "success": True,
-                "message": f"報告已發送至 {req.to_email}",
-                "email_id": result.get("id")
-            }
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
-        return {"success": False, "error": f"郵件發送失敗：{error_body}"}
-    except Exception as e:
-        logging.error(f"Email error: {e}")
-        return {"success": False, "error": str(e)}
+    success, msg = _send_email_sync(session, req.to_email)
+    if success:
+        return {"success": True, "message": msg}
+    else:
+        return {"success": False, "error": msg}
 
 @app.get("/health")
 async def health():
