@@ -555,6 +555,67 @@ h1 {
     padding-left: 4px;
 }
 
+.file-count {
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: normal;
+}
+
+.audio-file-list {
+    max-height: 250px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+.audio-file-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255,255,255,0.05);
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 14px;
+}
+
+.audio-file-icon {
+    font-size: 18px;
+}
+
+.audio-file-name {
+    flex: 1;
+    color: var(--text-light);
+    word-break: break-word;
+}
+
+.audio-file-size {
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.audio-file-empty {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px;
+    font-size: 14px;
+}
+
+.clear-btn-wrap {
+    text-align: center;
+}
+
+.processing-card {
+    background: var(--bg-card);
+    border: 2px solid var(--primary-color);
+}
+
+.warning {
+    color: #fbbf24;
+    text-align: center;
+    margin-top: 8px;
+}
+
 /* Result */
 .result-box {
     margin-top: 20px;
