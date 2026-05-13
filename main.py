@@ -12,7 +12,7 @@ import base64
 import tempfile
 import json
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
@@ -111,8 +111,13 @@ def get_or_create_session() -> str:
     }
     return session_id
 
-def transcribe_audio(audio_bytes: bytes) -> str:
-    """Transcribe audio using Faster Whisper (local)"""
+def transcribe_audio(audio_bytes: bytes, file_ext: str = ".webm") -> str:
+    """Transcribe audio using Faster Whisper (local)
+    
+    Args:
+        audio_bytes: Raw audio data
+        file_ext: File extension (e.g. .wav, .mp3, .m4a) for temp file
+    """
     try:
         from faster_whisper import WhisperModel
         import os as os_module
@@ -120,7 +125,7 @@ def transcribe_audio(audio_bytes: bytes) -> str:
         if HF_TOKEN:
             os_module.environ["HF_TOKEN"] = HF_TOKEN
         model = WhisperModel("small", device="cpu", compute_type="int8")
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
+        with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as f:
             f.write(audio_bytes)
             temp_path = f.name
         try:
@@ -326,6 +331,62 @@ def extract_placeholders(doc_path: str) -> list:
     auto_fill = {"date", "report_type", "content"}
     return [p for p in placeholders if p not in auto_fill]
 
+@app.post("/api/sessions/{session_id}/upload")
+async def upload_audio_files(session_id: str, request: Request, files: List[UploadFile] = File(...)):
+    """Upload one or more audio files for transcription"""
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if not files:
+        return {"success": False, "error": "請選擇至少一個音檔"}
+    
+    allowed_extensions = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac", ".aac", ".wma", ".opus"}
+    results = []
+    
+    for file in files:
+        # Validate file extension
+        ext = Path(file.filename).suffix.lower() if file.filename else ".webm"
+        if ext not in allowed_extensions:
+            results.append({
+                "filename": file.filename,
+                "success": False,
+                "transcription": f"[不支援的格式: {ext}]"
+            })
+            continue
+        
+        content = await file.read()
+        
+        def do_transcribe():
+            return transcribe_audio(content, file_ext=ext)
+        
+        try:
+            future = executor.submit(do_transcribe)
+            text = future.result(timeout=180)
+        except TimeoutError:
+            text = "[轉換失敗: 逾時]"
+        except Exception as e:
+            text = f"[轉換失敗: {str(e)}]"
+        
+        segment_id = str(uuid.uuid4())[:8]
+        
+        sessions[session_id]["segments"].append({
+            "id": segment_id,
+            "transcription": text,
+            "audio_path": file.filename
+        })
+        
+        results.append({
+            "filename": file.filename,
+            "success": True,
+            "segment_id": segment_id,
+            "transcription": text
+        })
+    
+    return {"success": True, "results": results}
+
 # =============================================================================
 # Pages (HTML)
 # =============================================================================
@@ -476,6 +537,22 @@ async def dashboard(request: Request):
             <div id="segments" class="segments-container"></div>
             
             <button class="btn btn-secondary" id="clearBtn">🗑 清空重置</button>
+        </div>
+        
+        <div class="card upload-card">
+            <h3>📁 上傳音檔</h3>
+            <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus</p>
+            <div class="upload-box" id="uploadBox">
+                <div class="upload-icon">📂</div>
+                <div class="upload-text">點擊選擇檔案 或 拖放音檔到此處</div>
+                <div class="upload-hint">可選擇多個檔案一次上傳</div>
+                <input type="file" id="fileInput" multiple accept=".wav,.mp3,.m4a,.ogg,.webm,.flac,.aac,.wma,.opus" class="file-input-hidden">
+            </div>
+            <div id="uploadProgress" class="upload-progress" style="display:none">
+                <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+                <div class="progress-text" id="progressText">上傳中...</div>
+            </div>
+            <div id="uploadResults" class="upload-results"></div>
         </div>
         
         <div class="actions">
@@ -687,6 +764,103 @@ async def dashboard(request: Request):
             emailBtn.disabled = false;
         }
     };
+
+    // ========== File Upload ==========
+    const uploadBox = document.getElementById('uploadBox');
+    const fileInput = document.getElementById('fileInput');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    const uploadResults = document.getElementById('uploadResults');
+
+    // Click to select files
+    uploadBox.addEventListener('click', () => fileInput.click());
+
+    // Drag & drop
+    uploadBox.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadBox.classList.add('drag-over');
+    });
+    uploadBox.addEventListener('dragleave', () => {
+        uploadBox.classList.remove('drag-over');
+    });
+    uploadBox.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadBox.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) {
+            fileInput.files = e.dataTransfer.files;
+            handleFiles(fileInput.files);
+        }
+    });
+
+    // File selected via dialog
+    fileInput.addEventListener('change', () => {
+        if (fileInput.files.length > 0) {
+            handleFiles(fileInput.files);
+        }
+    });
+
+    async function handleFiles(files) {
+        const formData = new FormData();
+        for (const file of files) {
+            formData.append('files', file);
+        }
+
+        // Show progress
+        uploadProgress.style.display = 'block';
+        progressFill.style.width = '10%';
+        progressText.textContent = '正在上傳 ' + files.length + ' 個檔案...';
+        uploadResults.innerHTML = '';
+
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/upload', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+
+            progressFill.style.width = '100%';
+            progressText.textContent = '處理完成';
+
+            if (data.success) {
+                let successCount = 0;
+                let failCount = 0;
+                let html = '';
+
+                data.results.forEach((r, i) => {
+                    if (r.success) {
+                        successCount++;
+                        segments.push({ id: r.segment_id, text: r.transcription });
+                        html += '<div class="upload-result-item success">' +
+                            '<span class="result-filename">' + escapeHtml(r.filename) + '</span> ✓ 辨識成功</div>';
+                    } else {
+                        failCount++;
+                        html += '<div class="upload-result-item fail">' +
+                            '<span class="result-filename">' + escapeHtml(r.filename) + '</span> ✗ ' + escapeHtml(r.transcription) + '</div>';
+                    }
+                });
+
+                uploadResults.innerHTML = html;
+                renderSegments();
+                checkGenerateReady();
+
+                if (failCount === 0) {
+                    status.textContent = '✓ ' + successCount + ' 個檔案上傳完成';
+                } else {
+                    status.textContent = '✓ ' + successCount + ' 個成功，' + failCount + ' 個失敗';
+                }
+            } else {
+                uploadResults.innerHTML = '<div class="upload-result-item fail">上傳失敗：' + escapeHtml(data.error || '未知錯誤') + '</div>';
+            }
+        } catch (e) {
+            progressFill.style.width = '0%';
+            progressText.textContent = '上傳錯誤';
+            uploadResults.innerHTML = '<div class="upload-result-item fail">錯誤：' + escapeHtml(e.message) + '</div>';
+        }
+
+        // Reset file input
+        fileInput.value = '';
+    }
     </script>
 </body>
 </html>"""
