@@ -107,7 +107,8 @@ def get_or_create_session() -> str:
         "report_type": "general",
         "segments": [],
         "generated_docx": None,
-        "created_at": datetime.now()
+        "created_at": datetime.now(),
+        "upload_files": {}  # {filename: {status, transcription, segment_id, error}}
     }
     return session_id
 
@@ -331,9 +332,50 @@ def extract_placeholders(doc_path: str) -> list:
     auto_fill = {"date", "report_type", "content"}
     return [p for p in placeholders if p not in auto_fill]
 
+def _process_uploaded_file(session_id: str, filepath: str, filename: str, ext: str):
+    """Background task: transcribe audio and store result in session"""
+    session = sessions.get(session_id)
+    if not session:
+        try:
+            os.unlink(filepath)
+        except:
+            pass
+        return
+    
+    session["upload_files"][filename]["status"] = "processing"
+    
+    try:
+        with open(filepath, "rb") as f:
+            audio_bytes = f.read()
+        text = transcribe_audio(audio_bytes, file_ext=ext)
+        
+        if text.startswith("[轉換失敗"):
+            session["upload_files"][filename]["status"] = "error"
+            session["upload_files"][filename]["error"] = text
+        else:
+            segment_id = str(uuid.uuid4())[:8]
+            session["segments"].append({
+                "id": segment_id,
+                "transcription": text,
+                "audio_path": filename
+            })
+            session["upload_files"][filename]["status"] = "done"
+            session["upload_files"][filename]["segment_id"] = segment_id
+            session["upload_files"][filename]["transcription"] = text
+    except Exception as e:
+        logging.error(f"Background transcription error for {filename}: {e}")
+        session["upload_files"][filename]["status"] = "error"
+        session["upload_files"][filename]["error"] = str(e)
+    finally:
+        try:
+            os.unlink(filepath)
+        except:
+            pass
+
+
 @app.post("/api/sessions/{session_id}/upload")
 async def upload_audio_files(session_id: str, request: Request, files: List[UploadFile] = File(...)):
-    """Upload one or more audio files for transcription"""
+    """Upload audio files for background transcription (async, non-blocking)"""
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -354,7 +396,8 @@ async def upload_audio_files(session_id: str, request: Request, files: List[Uplo
             results.append({
                 "filename": file.filename,
                 "success": False,
-                "transcription": f"[不支援的格式: {ext}]"
+                "status": "error",
+                "error": f"不支援的格式: {ext}"
             })
             continue
         
@@ -366,37 +409,62 @@ async def upload_audio_files(session_id: str, request: Request, files: List[Uplo
             results.append({
                 "filename": file.filename,
                 "success": False,
-                "transcription": f"[檔案過大: {file_size_mb:.1f}MB，上限 50MB]"
+                "status": "error",
+                "error": f"檔案過大: {file_size_mb:.1f}MB，上限 50MB"
             })
             continue
         
-        def do_transcribe():
-            return transcribe_audio(content, file_ext=ext)
+        # Save to disk for background processing
+        safe_name = f"{session_id}_{uuid.uuid4().hex[:8]}{ext}"
+        filepath = UPLOAD_DIR / safe_name
+        with open(filepath, "wb") as f:
+            f.write(content)
         
-        try:
-            future = executor.submit(do_transcribe)
-            text = future.result(timeout=180)
-        except TimeoutError:
-            text = "[轉換失敗: 逾時]"
-        except Exception as e:
-            text = f"[轉換失敗: {str(e)}]"
+        # Register in session with pending status
+        sessions[session_id]["upload_files"][file.filename] = {
+            "status": "pending",
+            "transcription": None,
+            "segment_id": None,
+            "error": None
+        }
         
-        segment_id = str(uuid.uuid4())[:8]
-        
-        sessions[session_id]["segments"].append({
-            "id": segment_id,
-            "transcription": text,
-            "audio_path": file.filename
-        })
+        # Submit to background thread
+        executor.submit(_process_uploaded_file, session_id, str(filepath), file.filename, ext)
         
         results.append({
             "filename": file.filename,
             "success": True,
-            "segment_id": segment_id,
-            "transcription": text
+            "status": "pending"
         })
     
     return {"success": True, "results": results}
+
+
+@app.get("/api/sessions/{session_id}/upload-status")
+async def get_upload_status(session_id: str, request: Request):
+    """Get background upload processing status"""
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    files = sessions[session_id].get("upload_files", {})
+    
+    # Count statuses
+    status_counts = {"pending": 0, "processing": 0, "done": 0, "error": 0}
+    for fname, info in files.items():
+        s = info.get("status", "pending")
+        if s in status_counts:
+            status_counts[s] += 1
+    
+    return {
+        "success": True,
+        "files": files,
+        "counts": status_counts,
+        "total": len(files),
+        "all_done": status_counts["done"] + status_counts["error"] == len(files) if files else True
+    }
 
 # =============================================================================
 # Pages (HTML)
@@ -515,7 +583,9 @@ async def dashboard(request: Request):
                 <li>➕ 停止後可繼續錄下一段，段落沒有限制</li>
                 <li>📁 也可上傳音檔（MP3/WAV/M4A 等），每檔上限 50MB，支援拖放或多選</li>
                 <li>🔄 錄音與上傳可混合使用，段落會累積，不限制次數</li>
-                <li>⏳ 所有段落都辨識完畢後，再按下「產生報告」</li>
+                <li>⏳ 上傳後的辨識在背景自動執行，可關閉網頁，完成後再回來查看</li>
+                <li>📋 上傳區會即時顯示每檔的處理狀態（等待中→辨識中→完成）</li>
+                <li>📥 所有段落都辨識完畢後，再按下「產生報告」</li>
                 <li>📥 報告產出成功後，可以下載或是以 Email 發送</li>
                 <li>📄 可上傳 Word 模板，AI 彙整內容會自動填入</li>
             </ul>
@@ -558,7 +628,7 @@ async def dashboard(request: Request):
             <div class="upload-box" id="uploadBox">
                 <div class="upload-icon">📂</div>
                 <div class="upload-text">點擊選擇檔案 或 拖放音檔到此處</div>
-                <div class="upload-hint">可選擇多個檔案一次上傳</div>
+                <div class="upload-hint">可選擇多個檔案一次上傳，辨識在背景執行</div>
                 <input type="file" id="fileInput" multiple accept=".wav,.mp3,.m4a,.ogg,.webm,.flac,.aac,.wma,.opus" class="file-input-hidden">
             </div>
             <div id="uploadProgress" class="upload-progress" style="display:none">
@@ -813,12 +883,80 @@ async def dashboard(request: Request):
         }
     });
 
+    let uploadPollTimer = null;
+
+    function renderFileStatus(fileInfo, filename) {
+        const statusMap = {
+            'pending': '<span class="badge-pending">⏳ 等待中</span>',
+            'processing': '<span class="badge-processing">🔄 辨識中</span>',
+            'done': '<span class="badge-done">✅ 完成</span>',
+            'error': '<span class="badge-error">❌ 失敗</span>'
+        };
+        const badge = statusMap[fileInfo.status] || statusMap['pending'];
+        let extra = '';
+        if (fileInfo.status === 'done' && fileInfo.transcription) {
+            extra = '<div class="file-preview">' + escapeHtml(fileInfo.transcription.substring(0, 80)) + (fileInfo.transcription.length > 80 ? '...' : '') + '</div>';
+        } else if (fileInfo.status === 'error') {
+            extra = '<div class="file-error-text">' + escapeHtml(fileInfo.error || '未知錯誤') + '</div>';
+        }
+        return '<div class="file-status-item status-' + fileInfo.status + '">' +
+            '<div class="file-status-header">' + badge + ' <span class="result-filename">' + escapeHtml(filename) + '</span></div>' +
+            extra + '</div>';
+    }
+
+    function renderUploadPanel(files) {
+        let html = '';
+        for (const [fname, info] of Object.entries(files)) {
+            html += renderFileStatus(info, fname);
+        }
+        uploadResults.innerHTML = html;
+    }
+
+    async function pollUploadStatus() {
+        try {
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/upload-status');
+            const data = await res.json();
+            if (!data.success) return;
+
+            renderUploadPanel(data.files);
+
+            // Update progress
+            const done = data.counts.done + data.counts.error;
+            const total = data.total;
+            const pct = total > 0 ? Math.round(done / total * 100) : 0;
+            progressFill.style.width = pct + '%';
+
+            if (data.all_done) {
+                progressText.textContent = '✓ ' + done + '/' + total + ' 處理完成';
+                if (uploadPollTimer) {
+                    clearInterval(uploadPollTimer);
+                    uploadPollTimer = null;
+                }
+                // Rebuild segments from completed uploads + check generate readiness
+                segments = [];
+                for (const [fname, info] of Object.entries(data.files)) {
+                    if (info.status === 'done' && info.segment_id) {
+                        segments.push({ id: info.segment_id, text: info.transcription });
+                    }
+                }
+                renderSegments();
+                checkGenerateReady();
+                status.textContent = '✓ ' + segments.length + ' 個段落辨識完成（可關閉此頁，回來繼續操作）';
+            } else {
+                progressText.textContent = '處理中 ' + done + '/' + total + '（可關閉此頁，完成後回來查看）';
+                status.textContent = '🔄 語音辨識背景處理中...';
+            }
+        } catch (e) {
+            // Silently retry on next poll
+        }
+    }
+
     async function handleFiles(files) {
         const MAX_MB = 50;
         // Frontend check: file size limit
         for (const file of files) {
             if (file.size > MAX_MB * 1024 * 1024) {
-                uploadResults.innerHTML = '<div class="upload-result-item fail">⚠️ <span class="result-filename">' + escapeHtml(file.name) + '</span> 超過 ' + MAX_MB + 'MB 限制（' + (file.size / 1024 / 1024).toFixed(1) + 'MB）</div>';
+                uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> <span class="result-filename">' + escapeHtml(file.name) + '</span> 超過 ' + MAX_MB + 'MB 限制（' + (file.size / 1024 / 1024).toFixed(1) + 'MB）</div>';
                 status.textContent = '❌ 部分檔案超過大小限制';
                 return;
             }
@@ -829,9 +967,9 @@ async def dashboard(request: Request):
             formData.append('files', file);
         }
 
-        // Show progress
+        // Show progress area
         uploadProgress.style.display = 'block';
-        progressFill.style.width = '10%';
+        progressFill.style.width = '5%';
         progressText.textContent = '正在上傳 ' + files.length + ' 個檔案...';
         uploadResults.innerHTML = '';
 
@@ -842,43 +980,32 @@ async def dashboard(request: Request):
             });
             const data = await res.json();
 
-            progressFill.style.width = '100%';
-            progressText.textContent = '處理完成';
-
             if (data.success) {
-                let successCount = 0;
-                let failCount = 0;
-                let html = '';
+                progressFill.style.width = '10%';
+                progressText.textContent = '已接收，背景辨識中...';
+                status.textContent = '🔄 語音辨識背景處理中，可關閉此頁...';
 
-                data.results.forEach((r, i) => {
+                // Initial render
+                const initFiles = {};
+                data.results.forEach(r => {
                     if (r.success) {
-                        successCount++;
-                        segments.push({ id: r.segment_id, text: r.transcription });
-                        html += '<div class="upload-result-item success">' +
-                            '<span class="result-filename">' + escapeHtml(r.filename) + '</span> ✓ 辨識成功</div>';
+                        initFiles[r.filename] = { status: 'pending', transcription: null, segment_id: null, error: null };
                     } else {
-                        failCount++;
-                        html += '<div class="upload-result-item fail">' +
-                            '<span class="result-filename">' + escapeHtml(r.filename) + '</span> ✗ ' + escapeHtml(r.transcription) + '</div>';
+                        initFiles[r.filename] = { status: 'error', error: r.error };
                     }
                 });
+                renderUploadPanel(initFiles);
 
-                uploadResults.innerHTML = html;
-                renderSegments();
-                checkGenerateReady();
-
-                if (failCount === 0) {
-                    status.textContent = '✓ ' + successCount + ' 個檔案上傳完成';
-                } else {
-                    status.textContent = '✓ ' + successCount + ' 個成功，' + failCount + ' 個失敗';
-                }
+                // Start polling
+                if (uploadPollTimer) clearInterval(uploadPollTimer);
+                uploadPollTimer = setInterval(pollUploadStatus, 2500);
             } else {
-                uploadResults.innerHTML = '<div class="upload-result-item fail">上傳失敗：' + escapeHtml(data.error || '未知錯誤') + '</div>';
+                uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> 上傳失敗：' + escapeHtml(data.error || '未知錯誤') + '</div>';
             }
         } catch (e) {
             progressFill.style.width = '0%';
             progressText.textContent = '上傳錯誤';
-            uploadResults.innerHTML = '<div class="upload-result-item fail">錯誤：' + escapeHtml(e.message) + '</div>';
+            uploadResults.innerHTML = '<div class="file-status-item status-error"><span class="badge-error">❌</span> 錯誤：' + escapeHtml(e.message) + '</div>';
         }
 
         // Reset file input
@@ -985,9 +1112,10 @@ async def clear_session(session_id: str, request: Request):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Clear segments
+    # Clear segments + upload files
     sessions[session_id]["segments"] = []
     sessions[session_id]["generated_docx"] = None
+    sessions[session_id]["upload_files"] = {}
     
     return {"success": True}
 

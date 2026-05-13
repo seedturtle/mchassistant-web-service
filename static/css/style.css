@@ -474,6 +474,57 @@ h1 {
     color: var(--primary-color);
 }
 
+/* File Status Items */
+.file-status-item {
+    background: rgba(255,255,255,0.05);
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.file-status-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.file-status-item.status-done {
+    border-left: 3px solid var(--success);
+}
+.file-status-item.status-error {
+    border-left: 3px solid var(--error);
+}
+.file-status-item.status-processing {
+    border-left: 3px solid #fbbf24;
+}
+.file-status-item.status-pending {
+    border-left: 3px solid var(--text-muted);
+}
+
+.badge-pending,
+.badge-processing,
+.badge-done,
+.badge-error {
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.file-preview {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-left: 4px;
+}
+
+.file-error-text {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--error);
+    padding-left: 4px;
+}
+
 /* Result */
 .result-box {
     margin-top: 20px;
