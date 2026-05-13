@@ -344,6 +344,7 @@ async def upload_audio_files(session_id: str, request: Request, files: List[Uplo
         return {"success": False, "error": "請選擇至少一個音檔"}
     
     allowed_extensions = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac", ".aac", ".wma", ".opus"}
+    max_bytes = 50 * 1024 * 1024  # 50MB per file
     results = []
     
     for file in files:
@@ -358,6 +359,16 @@ async def upload_audio_files(session_id: str, request: Request, files: List[Uplo
             continue
         
         content = await file.read()
+        
+        # Validate file size
+        if len(content) > max_bytes:
+            file_size_mb = len(content) / (1024 * 1024)
+            results.append({
+                "filename": file.filename,
+                "success": False,
+                "transcription": f"[檔案過大: {file_size_mb:.1f}MB，上限 50MB]"
+            })
+            continue
         
         def do_transcribe():
             return transcribe_audio(content, file_ext=ext)
@@ -502,7 +513,7 @@ async def dashboard(request: Request):
             <ul class="instructions-list">
                 <li>🎤 按下錄音鈕開始錄音，再按一下停止</li>
                 <li>➕ 停止後可繼續錄下一段，段落沒有限制</li>
-                <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選一次上傳</li>
+                <li>📁 也可上傳音檔（MP3/WAV/M4A 等），每檔上限 50MB，支援拖放或多選</li>
                 <li>⏳ 請耐心等待所有段落都辨識完畢後，再按下「產生報告」</li>
                 <li>📥 報告產出成功後，可以下載或是以 Email 發送</li>
                 <li>📄 可上傳 Word 模板，AI 彙整內容會自動填入</li>
@@ -542,7 +553,7 @@ async def dashboard(request: Request):
         
         <div class="card upload-card">
             <h3>📁 上傳音檔</h3>
-            <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus</p>
+            <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 50MB</p>
             <div class="upload-box" id="uploadBox">
                 <div class="upload-icon">📂</div>
                 <div class="upload-text">點擊選擇檔案 或 拖放音檔到此處</div>
@@ -802,6 +813,16 @@ async def dashboard(request: Request):
     });
 
     async function handleFiles(files) {
+        const MAX_MB = 50;
+        // Frontend check: file size limit
+        for (const file of files) {
+            if (file.size > MAX_MB * 1024 * 1024) {
+                uploadResults.innerHTML = '<div class="upload-result-item fail">⚠️ <span class="result-filename">' + escapeHtml(file.name) + '</span> 超過 ' + MAX_MB + 'MB 限制（' + (file.size / 1024 / 1024).toFixed(1) + 'MB）</div>';
+                status.textContent = '❌ 部分檔案超過大小限制';
+                return;
+            }
+        }
+        
         const formData = new FormData();
         for (const file of files) {
             formData.append('files', file);
