@@ -432,7 +432,7 @@ async def upload_audio_files(
         sessions[session_id]["auto_email_error"] = None
     
     allowed_extensions = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac", ".aac", ".wma", ".opus"}
-    max_bytes = 50 * 1024 * 1024
+    max_bytes = 100 * 1024 * 1024
     results = []
     
     for file in files:
@@ -442,7 +442,7 @@ async def upload_audio_files(
             continue
         content = await file.read()
         if len(content) > max_bytes:
-            results.append({"filename": file.filename, "success": False, "error": f"檔案過大: {len(content)/(1024*1024):.1f}MB，上限 50MB"})
+            results.append({"filename": file.filename, "success": False, "error": f"檔案過大: {len(content)/(1024*1024):.1f}MB，上限 100MB"})
             continue
         
         uid = uuid.uuid4().hex[:8]
@@ -625,7 +625,7 @@ async def dashboard(request: Request):
             <h3>📖 使用說明</h3>
             <ul class="instructions-list">
                 <li>🎤 按錄音鈕開始，再按一下停止，段落會自動列出</li>
-                <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選，每檔上限 50MB</li>
+                <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選，每檔上限 100MB</li>
                 <li>🔄 錄音與上傳的音檔會累積在列表中，可混合使用</li>
                 <li>⚡ 按下「即時處理」在頁面上觀看進度，完成後手動下載或寄送</li>
                 <li>📧 按下「背景處理並寄送」需先輸入 Email，完成後自動寄送到信箱，可關閉網頁</li>
@@ -662,7 +662,7 @@ async def dashboard(request: Request):
         
         <div class="card upload-card">
             <h3>📁 上傳音檔</h3>
-            <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 50MB</p>
+            <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 100MB</p>
             <div class="email-input-group">
                 <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
                 <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
@@ -869,7 +869,7 @@ async def dashboard(request: Request):
 
     async function doUpload(files) {{
         for (const f of files) {{
-            if (f.size > 50*1024*1024) {{ alert(f.name + ' 超過 50MB 限制'); return; }}
+            if (f.size > 100*1024*1024) {{ alert(f.name + ' 超過 100MB 限制'); return; }}
         }}
         const fd = new FormData();
         for (const f of files) fd.append('files', f);
