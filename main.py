@@ -723,9 +723,12 @@ async def dashboard(request: Request):
             for (const [uid, info] of Object.entries(files)) {{
                 const icon = info.source === 'record' ? '🎤' : '📁';
                 const sizeKB = (info.size / 1024).toFixed(1);
-                html += '<div class="audio-file-item"><span class="audio-file-icon">' + icon + '</span>' +
+                html += '<div class="audio-file-item">' +
+                    '<span class="audio-file-icon">' + icon + '</span>' +
                     '<span class="audio-file-name">' + escapeHtml(info.filename) + '</span>' +
-                    '<span class="audio-file-size">' + sizeKB + 'KB</span></div>';
+                    '<span class="audio-file-size">' + sizeKB + 'KB</span>' +
+                    '<button class="btn-delete-file" onclick="deleteAudioFile(\'' + uid + '\')" title="刪除此音檔">✕</button>' +
+                    '</div>';
             }}
             listEl.innerHTML = html || '<div class="audio-file-empty">尚無音檔，請錄音或上傳</div>';
         }} catch(e) {{}}
@@ -841,7 +844,7 @@ async def dashboard(request: Request):
                 }};
                 mediaRecorder.start(); isRecording = true;
                 this.textContent = '⏹️';
-                let remaining = 300;
+                let remaining = 600; // 10分鐘
                 recordingTimer = setInterval(() => {{
                     remaining--;
                     const m = Math.floor(remaining/60), s = remaining%60;
@@ -1036,6 +1039,24 @@ async def dashboard(request: Request):
         document.getElementById('emailBtn').disabled = false;
     }});
 
+    // ========== Delete Single Audio File ==========
+    async function deleteAudioFile(uid) {{
+        if (isProcessing) {{ alert('處理中，無法刪除'); return; }}
+        if (!confirm('確定刪除此音檔？')) return;
+        try {{
+            const res = await fetch('/api/sessions/' + SESSION_ID + '/audio-files/' + uid, {{method:'DELETE'}});
+            const data = await res.json();
+            if (data.success) {{
+                await refreshFileList();
+                document.getElementById('status').textContent = '✓ 音檔已刪除';
+            }} else {{
+                alert('刪除失敗');
+            }}
+        }} catch(e) {{
+            alert('錯誤：' + e.message);
+        }}
+    }}
+
     // ========== Init ==========
     refreshFileList();
     </script>
@@ -1137,6 +1158,31 @@ async def download_report(session_id: str, request: Request):
         return Response(content="\n\n".join([s["transcription"] for s in session["segments"]]),
             media_type="text/plain; charset=utf-8")
     raise HTTPException(status_code=404, detail="No report to download")
+
+@app.delete("/api/sessions/{session_id}/audio-files/{uid}")
+async def delete_audio_file(session_id: str, uid: str, request: Request):
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    audio_files = sessions[session_id].get("audio_files", {})
+    if uid not in audio_files:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    
+    # Delete the actual file on disk
+    filepath = audio_files[uid].get("filepath")
+    if filepath and Path(filepath).exists():
+        try:
+            Path(filepath).unlink()
+        except Exception as e:
+            logging.warning(f"Failed to delete file {filepath}: {e}")
+    
+    # Remove from session
+    del audio_files[uid]
+    
+    return {"success": True}
+
 
 @app.post("/api/sessions/{session_id}/email")
 async def email_report(session_id: str, request: Request, req: EmailRequest):

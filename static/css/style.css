@@ -594,6 +594,24 @@ h1 {
     white-space: nowrap;
 }
 
+.btn-delete-file {
+    background: none;
+    border: none;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: var(--transition);
+    line-height: 1;
+    opacity: 0.6;
+}
+
+.btn-delete-file:hover {
+    opacity: 1;
+    background: rgba(248,113,113,0.15);
+}
+
 .audio-file-empty {
     color: var(--text-muted);
     text-align: center;
