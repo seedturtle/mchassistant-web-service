@@ -727,7 +727,7 @@ async def dashboard(request: Request):
                     '<span class="audio-file-icon">' + icon + '</span>' +
                     '<span class="audio-file-name">' + escapeHtml(info.filename) + '</span>' +
                     '<span class="audio-file-size">' + sizeKB + 'KB</span>' +
-                    '<button class="btn-delete-file" onclick="deleteAudioFile(\'' + uid + '\')" title="刪除此音檔">✕</button>' +
+                    '<button class="btn-delete-file" onclick="deleteAudioFile(\\'' + uid + '\\')" title="刪除此音檔">✕</button>' +
                     '</div>';
             }}
             listEl.innerHTML = html || '<div class="audio-file-empty">尚無音檔，請錄音或上傳</div>';
