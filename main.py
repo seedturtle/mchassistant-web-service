@@ -1151,9 +1151,10 @@ async def download_report(session_id: str, request: Request):
         raise HTTPException(status_code=404, detail="Session not found")
     session = sessions[session_id]
     if session.get("generated_docx"):
+        today = datetime.now().strftime('%Y%m%d')
         return Response(content=session["generated_docx"],
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''MCH_報名_{datetime.now().strftime('%Y%m%d')}.docx"})
+            headers={"Content-Disposition": f"attachment; filename=MCH_Report_{today}.docx"})
     elif session.get("segments"):
         return Response(content="\n\n".join([s["transcription"] for s in session["segments"]]),
             media_type="text/plain; charset=utf-8")
