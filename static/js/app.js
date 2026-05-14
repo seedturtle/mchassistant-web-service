@@ -98,7 +98,7 @@ if (recordBtn) {
                 recordBtn.textContent = '⏹️';
                 
                 // 5分鐘計時器
-                let remaining = 300;
+                let remaining = 600; // 10分鐘
                 const timerDisplay = setInterval(() => {
                     remaining--;
                     const mins = Math.floor(remaining / 60);
