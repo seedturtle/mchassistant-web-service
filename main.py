@@ -663,10 +663,6 @@ async def dashboard(request: Request):
         <div class="card upload-card">
             <h3>📁 上傳音檔</h3>
             <p class="hint">支援格式：MP3、WAV、M4A、OGG、FLAC、AAC、WebM、Opus ｜ 每檔上限 100MB</p>
-            <div class="email-input-group">
-                <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
-                <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
-            </div>
             <div class="upload-box" id="uploadBox">
                 <div class="upload-icon">📂</div>
                 <div class="upload-text">點擊選擇檔案 或 拖放音檔到此處</div>
@@ -690,6 +686,10 @@ async def dashboard(request: Request):
         </div>
         
         <div class="actions">
+            <div class="email-input-group">
+                <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
+                <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
+            </div>
             <button class="btn btn-email-mode" id="bgEmailBtn">📧 背景處理並寄送</button>
             <button class="btn btn-generate" id="generateBtn">⚡ 即時處理</button>
             <button class="btn btn-download" id="downloadBtn" disabled>📥 下載報告</button>
