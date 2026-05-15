@@ -1391,7 +1391,7 @@ async def dysphagia_email(req: DysphagiaUploadRequest, request: Request):
     plain_encoded = base64.b64encode(plain_body.encode('utf-8')).decode('utf-8')
 
     # Use Maton Gmail API to send
-    gmail_send_url = "https://gateway.maton.ai/google-gmail/gmail/v1/messages/send"
+    gmail_send_url = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
 
     # Construct the raw email (RFC 5322 format with base64 encoded parts)
     import email.generator
