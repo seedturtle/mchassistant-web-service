@@ -36,7 +36,8 @@ RECORDING_DIR = Path("./recordings")
 RECORDING_DIR.mkdir(exist_ok=True)
 
 MATON_API_KEY = os.getenv("MATON_API_KEY", "")
-GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
+DRIVE_UPLOAD_URL = "https://gateway.maton.ai/google-drive/upload/drive/v3/files"
+DRIVE_FOLDER_ID = "1Xymr-gCVnOlBWEoz1rJhkRJgrJ55FWV6"  # 吞嚥篩檢報告
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
@@ -60,6 +61,11 @@ class EmailRequest(BaseModel):
     to_email: str
     subject: str = "MCH Assistant 報告"
     body: str = ""
+
+class DysphagiaUploadRequest(BaseModel):
+    report: str
+    patientName: str
+    date: str
 
 # =============================================================================
 # Lifespan
@@ -1204,6 +1210,97 @@ async def health():
 @app.get("/api/status")
 async def api_status():
     return {"service": "MCH Assistant", "version": "2.1.0", "status": "running", "sessions": len(sessions)}
+
+# =============================================================================
+# Dysphagia Screening Report Upload
+# =============================================================================
+
+def _upload_to_drive(content: str, filename: str) -> tuple:
+    """Upload text report to Google Drive via Maton API. Returns (success, fileId or error)."""
+    import urllib.request, json
+
+    file_data = content.encode('utf-8')
+    file_size = len(file_data)
+
+    # Step 1: Start resumable upload session
+    meta = json.dumps({
+        "name": filename,
+        "parents": [DRIVE_FOLDER_ID]
+    }).encode()
+
+    req1 = urllib.request.Request(
+        DRIVE_UPLOAD_URL + "?uploadType=resumable",
+        data=meta,
+        headers={
+            "Authorization": f"Bearer {MATON_API_KEY}",
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Type": "text/plain; charset=utf-8",
+            "X-Upload-Content-Length": str(file_size)
+        },
+        method="POST"
+    )
+
+    try:
+        resp1 = urllib.request.urlopen(req1, timeout=15)
+        location = resp1.getheader("Location")
+    except Exception as e:
+        return False, f"無法建立上傳連線：{str(e)}"
+
+    # Step 2: PUT file content to session URL
+    req2 = urllib.request.Request(
+        location,
+        data=file_data,
+        headers={
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Length": str(file_size)
+        },
+        method="PUT"
+    )
+
+    try:
+        resp2 = urllib.request.urlopen(req2, timeout=30)
+        result = json.loads(resp2.read())
+        file_id = result.get("id", "unknown")
+    except Exception as e:
+        return False, f"上傳失敗：{str(e)}"
+
+    # Step 3: Verify by downloading
+    try:
+        verify_req = urllib.request.Request(
+            f"https://gateway.maton.ai/google-drive/drive/v3/files/{file_id}?alt=media",
+            headers={"Authorization": f"Bearer {MATON_API_KEY}"}
+        )
+        with urllib.request.urlopen(verify_req, timeout=20) as vresp:
+            verified_size = len(vresp.read())
+            if verified_size != file_size:
+                return False, f"檔案驗證失敗（大小不符）"
+    except Exception as e:
+        return False, f"檔案驗證失敗：{str(e)}"
+
+    return True, file_id
+
+
+@app.post("/api/dysphagia/upload")
+async def dysphagia_upload(req: DysphagiaUploadRequest, request: Request):
+    """Receive dysphagia screening report and upload to Google Drive."""
+    # Check if MATON_API_KEY is configured
+    if not MATON_API_KEY:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Maton API Key 未設定，請聯繫系統管理員"}
+        )
+
+    # Build filename: 吞嚥篩檢報告_[姓名]_[日期].txt
+    safe_name = re.sub(r'[\\/:*?"<>|]', '_', req.patientName or '未命名')
+    filename = f"吞嚥篩檢報告_{safe_name}_{req.date}.txt"
+
+    # Upload to Google Drive
+    success, result = _upload_to_drive(req.report, filename)
+
+    if success:
+        return {"success": True, "fileId": result, "filename": filename}
+    else:
+        return JSONResponse(status_code=500, content={"success": False, "error": result})
 
 # =============================================================================
 # Run
