@@ -38,7 +38,7 @@ RECORDING_DIR.mkdir(exist_ok=True)
 
 MATON_API_KEY = os.getenv("MATON_API_KEY", "")
 DRIVE_UPLOAD_URL = "https://gateway.maton.ai/google-drive/upload/drive/v3/files"
-DRIVE_FOLDER_ID = "1Xymr-gCVnOlBWEoz1rJhkRJgrJ55FWV6"  # 吞嚥篩檢報告
+DRIVE_FOLDER_ID = "15goCYQxn8xM7R1HoLLTS-Hbv-lSge8Y2"  # 吞嚥障礙問卷篩檢報告
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
