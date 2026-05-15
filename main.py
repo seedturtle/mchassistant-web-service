@@ -66,6 +66,7 @@ class DysphagiaUploadRequest(BaseModel):
     report: str
     patientName: str
     date: str
+    to: str = ""  # optional, for email endpoint
 
 # =============================================================================
 # Lifespan
@@ -1301,6 +1302,116 @@ async def dysphagia_upload(req: DysphagiaUploadRequest, request: Request):
         return {"success": True, "fileId": result, "filename": filename}
     else:
         return JSONResponse(status_code=500, content={"success": False, "error": result})
+
+
+@app.post("/api/dysphagia/email")
+async def dysphagia_email(req: DysphagiaUploadRequest, request: Request):
+    """Send dysphagia screening report via email using Maton Gmail API."""
+    if not MATON_API_KEY:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "Maton API Key 未設定，請聯繫系統管理員"}
+        )
+
+    if not req.to:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "請提供收件者 Email"}
+        )
+
+    import urllib.request
+
+    # Build email metadata
+    safe_name = re.sub(r'[\\/:*?"<>|]', '_', req.patientName or '未命名')
+    subject = f"【門諾醫院】吞嚥篩檢報告 - {safe_name} ({req.date})"
+
+    # Build HTML body
+    html_body = f"""
+    <html>
+    <body style="font-family: 'Noto Sans TC', Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 20px;">
+      <div style="background: linear-gradient(135deg, #2c6e9e, #1a4a6b); color: white; padding: 24px; border-radius: 12px 12px 0 0; text-align: center;">
+        <h2 style="margin: 0;">🏥 門諾醫院 吞嚥篩檢報告</h2>
+        <p style="margin: 8px 0 0; opacity: 0.9;">Mennonite Christian Hospital - Dysphagia Screening Report</p>
+      </div>
+      <div style="background: #f8fbfd; padding: 24px; border: 1px solid #d0d9e0; border-top: none; border-radius: 0 0 12px 12px;">
+        <p style="color: #555; font-size: 14px;">📋 <strong>受檢者：</strong>{safe_name} &nbsp;&nbsp; 📅 <strong>篩檢日期：</strong>{req.date}</p>
+        <hr style="border: none; border-top: 1px solid #d0d9e0; margin: 16px 0;">
+        <pre style="white-space: pre-wrap; word-wrap: break-word; font-size: 14px; line-height: 1.7; color: #333; font-family: inherit;">{req.report}</pre>
+        <hr style="border: none; border-top: 1px solid #d0d9e0; margin: 16px 0;">
+        <p style="font-size: 12px; color: #888; text-align: center;">
+          本報告由門諾醫院吞嚥團隊 AI 助理自動產生，僅供參考，不作為診斷依據。<br>
+          如有吞嚥問題請諮詢專業醫療人員。<br>
+          <em>This report is automatically generated and for reference only. Please consult a healthcare professional for any medical concerns.</em>
+        </p>
+      </div>
+    </body>
+    </html>
+    """
+
+    # Build plain text body
+    plain_body = f"""門諾醫院 吞嚥篩檢報告
+====================
+受檢者：{safe_name}
+篩檢日期：{req.date}
+
+{req.report}
+
+---
+本報告由門諾醫院吞嚥團隊 AI 助理自動產生，僅供參考，不作為診斷依據。
+如有吞嚥問題請諮詢專業醫療人員。
+"""
+
+    # Construct RFC 2822 email
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import email.utils
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = "mchswallow@gmail.com"
+    msg['To'] = req.to
+    msg['Date'] = email.utils.formatdate(localtime=True)
+
+    # Encode properly for SMTP
+    import base64
+    html_encoded = base64.b64encode(html_body.encode('utf-8')).decode('utf-8')
+    plain_encoded = base64.b64encode(plain_body.encode('utf-8')).decode('utf-8')
+
+    # Use Maton Gmail API to send
+    gmail_send_url = "https://gateway.maton.ai/google-gmail/gmail/v1/messages/send"
+
+    # Construct the raw email (RFC 5322 format with base64 encoded parts)
+    import email.generator
+    import io as _io
+
+    msg.attach(MIMEText(plain_body, 'plain', 'utf-8'))
+    msg.attach(MIMEText(html_body, 'html', 'utf-8'))
+
+    # Get raw email bytes
+    buf = _io.BytesIO()
+    gen = email.generator.BytesGenerator(buf)
+    gen.flatten(msg)
+    raw_email_b64 = base64.urlsafe_b64encode(buf.getvalue()).decode('utf-8')
+
+    payload = json.dumps({"raw": raw_email_b64})
+
+    req_gmail = urllib.request.Request(
+        gmail_send_url,
+        data=payload.encode('utf-8'),
+        headers={
+            "Authorization": f"Bearer {MATON_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        resp = urllib.request.urlopen(req_gmail, timeout=30)
+        result_data = json.loads(resp.read())
+        thread_id = result_data.get('threadId', '')
+        return {"success": True, "messageId": result_data.get('id', ''), "threadId": thread_id}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": f"寄送失敗：{str(e)}"})
 
 # =============================================================================
 # Run
