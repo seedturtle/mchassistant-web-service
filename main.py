@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from docx import Document
 from email.mime.multipart import MIMEMultipart
@@ -86,6 +87,18 @@ app = FastAPI(
     description="門諾醫院AI語音助理 - 語音轉文字生成報告",
     version="2.1.0",
     lifespan=lifespan
+)
+
+# CORS: allow dysphagia screening frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://mchdysphagiascreen.zeabur.app",
+        "http://localhost:8080",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 BASE_DIR = Path(__file__).parent
