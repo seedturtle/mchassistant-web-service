@@ -26,13 +26,12 @@
         
         <div class="card">
             <h3>📋 報告類型</h3>
-            <select id="reportType" class="select-full">
-                <option value="general">一般報告</option>
-                <option value="medical">醫療報告</option>
-                <option value="meeting">會議記錄</option>
-                <option value="swallow">吞嚥評估</option>
-                <option value="ent">耳鼻喉科報告</option>
-            </select>
+            <div style="display:flex; gap:8px; align-items:stretch;">
+                <select id="reportType" class="select-full" style="flex:1;">
+                    <option value="" disabled selected>載入中...</option>
+                </select>
+                <button id="manageTypesBtn" class="btn btn-secondary" style="white-space:nowrap; padding:12px 16px; font-size:18px; line-height:1; border-radius:10px;" title="管理報告類型">✏️</button>
+            </div>
         </div>
         
         <div class="card">
@@ -63,6 +62,25 @@
         </div>
         
         <div id="result" class="result-box"></div>
+    </div>
+    
+    <!-- Report Type Management Modal -->
+    <div id="typeModal" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📋 管理報告類型</h3>
+                <button id="closeModalBtn" class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="type-list" id="typeList">
+                    <!-- loaded dynamically -->
+                </div>
+                <div class="type-add">
+                    <input type="text" id="newTypeName" class="input-full" placeholder="輸入新報告類型名稱..." maxlength="30">
+                    <button id="addTypeBtn" class="btn btn-secondary" style="margin-top:8px; width:100%;">＋ 新增</button>
+                </div>
+            </div>
+        </div>
     </div>
     
     <script>
@@ -241,6 +259,113 @@
             emailBtn.disabled = false;
         }
     };
+    
+    // ══════════════════════════════════════════
+    // Report Type Management
+    // ══════════════════════════════════════════
+    const manageTypesBtn = document.getElementById('manageTypesBtn');
+    const typeModal = document.getElementById('typeModal');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+    const typeList = document.getElementById('typeList');
+    const newTypeName = document.getElementById('newTypeName');
+    const addTypeBtn = document.getElementById('addTypeBtn');
+    
+    async function loadReportTypes() {
+        try {
+            const res = await fetch('/api/report-types');
+            const data = await res.json();
+            
+            reportType.innerHTML = '';
+            data.types.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.name;
+                reportType.appendChild(opt);
+            });
+            
+            renderTypeList(data.types);
+        } catch (e) {
+            console.error('Failed to load report types:', e);
+        }
+    }
+    
+    function renderTypeList(types) {
+        typeList.innerHTML = types.map(t => {
+            const isDefault = ['general','medical','meeting','swallow','ent'].includes(t.id);
+            return '<div class="type-list-item">' +
+                '<span class="type-name">' + escapeHtml(t.name) + '</span>' +
+                (isDefault ? '<span class="type-badge">預設</span>' : '<button class="type-delete-btn" data-id="' + t.id + '" title="刪除">✕</button>') +
+            '</div>';
+        }).join('');
+        
+        document.querySelectorAll('.type-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const typeId = btn.dataset.id;
+                const name = btn.parentElement.querySelector('.type-name').textContent;
+                if (!confirm('確定刪除「' + name + '」？')) return;
+                try {
+                    const res = await fetch('/api/report-types/' + typeId, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) {
+                        await loadReportTypes();
+                    } else {
+                        alert('刪除失敗：' + (data.detail || data.error || '未知錯誤'));
+                    }
+                } catch (e) {
+                    alert('刪除失敗：' + e.message);
+                }
+            });
+        });
+    }
+    
+    if (manageTypesBtn) {
+        manageTypesBtn.addEventListener('click', () => {
+            typeModal.style.display = 'flex';
+            loadReportTypes();
+        });
+    }
+    
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener('click', () => {
+            typeModal.style.display = 'none';
+        });
+    }
+    
+    if (typeModal) {
+        typeModal.addEventListener('click', (e) => {
+            if (e.target === typeModal) typeModal.style.display = 'none';
+        });
+    }
+    
+    if (addTypeBtn) {
+        addTypeBtn.addEventListener('click', async () => {
+            const name = newTypeName.value.trim();
+            if (!name) { alert('請輸入報告類型名稱'); return; }
+            try {
+                const res = await fetch('/api/report-types', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    newTypeName.value = '';
+                    await loadReportTypes();
+                } else {
+                    alert('新增失敗：' + (data.detail || data.error || '未知錯誤'));
+                }
+            } catch (e) {
+                alert('新增失敗：' + e.message);
+            }
+        });
+        
+        newTypeName.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') addTypeBtn.click();
+        });
+    }
+    
+    // Load report types on startup
+    loadReportTypes();
     </script>
 </body>
 </html>

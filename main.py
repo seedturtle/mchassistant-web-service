@@ -39,6 +39,8 @@ RECORDING_DIR.mkdir(exist_ok=True)
 MATON_API_KEY = os.getenv("MATON_API_KEY", "")
 DRIVE_UPLOAD_URL = "https://gateway.maton.ai/google-drive/upload/drive/v3/files"
 DRIVE_FOLDER_ID = "15goCYQxn8xM7R1HoLLTS-Hbv-lSge8Y2"  # 吞嚥障礙問卷篩檢報告
+GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
+REPORT_TYPES_FILE = Path("./report_types.json")
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
@@ -46,6 +48,33 @@ MINIMAX_API_GATEWAY = "https://api.minimax.io/v1/text/chatcompletion_v2"
 
 sessions = {}
 executor = ThreadPoolExecutor(max_workers=2)
+
+# =============================================================================
+# Dynamic Report Types (persisted to JSON)
+# =============================================================================
+
+DEFAULT_REPORT_TYPES = {
+    "general": "一般報告",
+    "medical": "醫療報告",
+    "meeting": "會議記錄",
+    "swallow": "吞嚥評估",
+    "ent": "耳鼻喉科報告"
+}
+
+def load_report_types() -> dict:
+    if REPORT_TYPES_FILE.exists():
+        try:
+            return json.loads(REPORT_TYPES_FILE.read_text())
+        except Exception as e:
+            logging.warning(f"Failed to load {REPORT_TYPES_FILE}: {e}")
+    data = dict(DEFAULT_REPORT_TYPES)
+    save_report_types(data)
+    return data
+
+def save_report_types(data: dict):
+    REPORT_TYPES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+report_types_store = load_report_types()
 
 TEMPLATES_DIR = Path("./templates")
 TEMPLATES_DIR.mkdir(exist_ok=True)
@@ -85,7 +114,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="MCH Assistant 語音助理",
     description="門諾醫院AI語音助理 - 語音轉文字生成報告",
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan
 )
 
@@ -165,11 +194,7 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
         import urllib.request
         import urllib.error
         
-        report_type_names = {
-            "general": "一般報告", "medical": "醫療報告", "meeting": "會議記錄",
-            "swallow": "吞嚥評估", "ent": "耳鼻喉科報告"
-        }
-        type_name = report_type_names.get(report_type, "報告")
+        type_name = report_types_store.get(report_type, report_type)
         
         if placeholders:
             fields_str = "、".join(placeholders)
@@ -279,8 +304,7 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
     return buffer.getvalue()
 
 def get_report_type_name(report_type: str) -> str:
-    names = {"general": "一般報告", "medical": "醫療報告", "meeting": "會議記錄", "swallow": "吞嚥評估", "ent": "耳鼻喉科報告"}
-    return names.get(report_type, report_type)
+    return report_types_store.get(report_type, report_type)
 
 def extract_placeholders(doc_path: str) -> list:
     doc = Document(doc_path)
@@ -656,13 +680,12 @@ async def dashboard(request: Request):
         
         <div class="card">
             <h3>📋 報告類型</h3>
-            <select id="reportType" class="select-full">
-                <option value="general">一般報告</option>
-                <option value="medical">醫療報告</option>
-                <option value="meeting">會議記錄</option>
-                <option value="swallow">吞嚥評估</option>
-                <option value="ent">耳鼻喉科報告</option>
-            </select>
+            <div style="display:flex; gap:8px; align-items:stretch;">
+                <select id="reportType" class="select-full" style="flex:1;">
+                    <option value="" disabled selected>載入中...</option>
+                </select>
+                <button id="manageTypesBtn" class="btn btn-secondary" style="white-space:nowrap; padding:12px 16px; font-size:18px; line-height:1; border-radius:10px;" title="管理報告類型">✏️</button>
+            </div>
         </div>
         
         <div class="card">
@@ -1079,7 +1102,108 @@ async def dashboard(request: Request):
 
     // ========== Init ==========
     refreshFileList();
+    
+    // ══════════════════════════════════════════
+    // Report Type Management
+    // ══════════════════════════════════════════
+    const manageTypesBtn = document.getElementById('manageTypesBtn');
+    const typeModal = document.getElementById('typeModal');
+    const closeModalBtn = document.getElementById('closeModalBtn');
+    const typeList = document.getElementById('typeList');
+    const newTypeName = document.getElementById('newTypeName');
+    const addTypeBtn = document.getElementById('addTypeBtn');
+    
+    async function loadReportTypes() {{
+        try {{
+            const res = await fetch('/api/report-types');
+            const data = await res.json();
+            reportType.innerHTML = '';
+            data.types.forEach(t => {{
+                const opt = document.createElement('option');
+                opt.value = t.id;
+                opt.textContent = t.name;
+                reportType.appendChild(opt);
+            }});
+            renderTypeList(data.types);
+        }} catch(e) {{
+            console.error('Failed to load report types:', e);
+        }}
+    }}
+    
+    function renderTypeList(types) {{
+        typeList.innerHTML = types.map(t => {{
+            const isDefault = ['general','medical','meeting','swallow','ent'].includes(t.id);
+            return '<div class="type-list-item">' +
+                '<span class="type-name">' + escapeHtml(t.name) + '</span>' +
+                (isDefault ? '<span class="type-badge">預設</span>' : '<button class="type-delete-btn" data-id="' + t.id + '" title="刪除">✕</button>') +
+            '</div>';
+        }}).join('');
+        document.querySelectorAll('.type-delete-btn').forEach(btn => {{
+            btn.addEventListener('click', async () => {{
+                const typeId = btn.dataset.id;
+                const name = btn.parentElement.querySelector('.type-name').textContent;
+                if (!confirm('確定刪除「' + name + '」？')) return;
+                try {{
+                    const res = await fetch('/api/report-types/' + typeId, {{ method: 'DELETE' }});
+                    const data = await res.json();
+                    if (data.success) await loadReportTypes();
+                    else alert('刪除失敗：' + (data.detail || data.error || '未知錯誤'));
+                }} catch(e) {{ alert('刪除失敗：' + e.message); }}
+            }});
+        }});
+    }}
+    
+    if (manageTypesBtn) {{
+        manageTypesBtn.addEventListener('click', () => {{
+            typeModal.style.display = 'flex';
+            loadReportTypes();
+        }});
+    }}
+    if (closeModalBtn) {{
+        closeModalBtn.addEventListener('click', () => {{ typeModal.style.display = 'none'; }});
+    }}
+    if (typeModal) {{
+        typeModal.addEventListener('click', (e) => {{
+            if (e.target === typeModal) typeModal.style.display = 'none';
+        }});
+    }}
+    if (addTypeBtn) {{
+        addTypeBtn.addEventListener('click', async () => {{
+            const name = newTypeName.value.trim();
+            if (!name) {{ alert('請輸入報告類型名稱'); return; }}
+            try {{
+                const res = await fetch('/api/report-types', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ name: name }})
+                }});
+                const data = await res.json();
+                if (data.success) {{ newTypeName.value = ''; await loadReportTypes(); }}
+                else alert('新增失敗：' + (data.detail || data.error || '未知錯誤'));
+            }} catch(e) {{ alert('新增失敗：' + e.message); }}
+        }});
+        newTypeName.addEventListener('keydown', (e) => {{
+            if (e.key === 'Enter') addTypeBtn.click();
+        }});
+    }}
+    loadReportTypes();
     </script>
+    <!-- Report Type Management Modal -->
+    <div id="typeModal" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📋 管理報告類型</h3>
+                <button id="closeModalBtn" class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="type-list" id="typeList"></div>
+                <div class="type-add">
+                    <input type="text" id="newTypeName" class="input-full" placeholder="輸入新報告類型名稱..." maxlength="30">
+                    <button id="addTypeBtn" class="btn btn-secondary" style="margin-top:8px; width:100%;">＋ 新增</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body></html>"""
     return HTMLResponse(content=html)
 
@@ -1425,6 +1549,58 @@ async def dysphagia_email(req: DysphagiaUploadRequest, request: Request):
         return {"success": True, "messageId": result_data.get('id', ''), "threadId": thread_id}
     except Exception as e:
         return JSONResponse(status_code=500, content={"success": False, "error": f"寄送失敗：{str(e)}"})
+
+# =============================================================================
+# Report Types CRUD API
+# =============================================================================
+
+@app.get("/api/report-types")
+async def api_list_report_types():
+    """列出所有報告類型"""
+    types = [{"id": k, "name": v} for k, v in sorted(report_types_store.items())]
+    return {"success": True, "types": types}
+
+@app.post("/api/report-types")
+async def api_add_report_type(req: Request):
+    """新增報告類型（只需提供 name，自動生成 id）"""
+    body = await req.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name 為必填")
+    
+    # Generate unique id from name (slug) + random suffix if needed
+    type_id = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fff]', '_', name).lower()[:20]
+    if type_id in report_types_store:
+        # Append random suffix for uniqueness
+        type_id = f"{type_id}_{uuid.uuid4().hex[:4]}"
+    
+    report_types_store[type_id] = name
+    save_report_types(report_types_store)
+    return {"success": True, "id": type_id, "name": name}
+
+@app.put("/api/report-types/{type_id}")
+async def api_rename_report_type(type_id: str, req: Request):
+    """重新命名報告類型"""
+    if type_id not in report_types_store:
+        raise HTTPException(status_code=404, detail="報告類型不存在")
+    body = await req.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name 為必填")
+    report_types_store[type_id] = name
+    save_report_types(report_types_store)
+    return {"success": True, "id": type_id, "name": name}
+
+@app.delete("/api/report-types/{type_id}")
+async def api_delete_report_type(type_id: str):
+    """刪除報告類型"""
+    if type_id not in report_types_store:
+        raise HTTPException(status_code=404, detail="報告類型不存在")
+    if type_id in DEFAULT_REPORT_TYPES:
+        raise HTTPException(status_code=400, detail="無法刪除預設報告類型")
+    del report_types_store[type_id]
+    save_report_types(report_types_store)
+    return {"success": True}
 
 # =============================================================================
 # Run

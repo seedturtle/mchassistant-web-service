@@ -682,3 +682,115 @@ h1 {
         padding: 24px;
     }
 }
+
+/* Modal */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 20px;
+}
+
+.modal-content {
+    background: var(--bg-card);
+    border-radius: var(--border-radius);
+    width: 100%;
+    max-width: 440px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px 0;
+}
+
+.modal-header h3 {
+    color: var(--text-light);
+    font-size: 18px;
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    line-height: 1;
+    transition: var(--transition);
+}
+
+.modal-close:hover {
+    color: var(--text-light);
+    background: rgba(255,255,255,0.1);
+}
+
+.modal-body {
+    padding: 20px 24px 24px;
+    overflow-y: auto;
+}
+
+.type-list {
+    margin-bottom: 16px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.type-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    font-size: 15px;
+}
+
+.type-list-item .type-name {
+    flex: 1;
+    color: var(--text-light);
+}
+
+.type-list-item .type-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.type-list-item .type-delete-btn {
+    background: none;
+    border: none;
+    color: var(--error);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    opacity: 0.6;
+    transition: var(--transition);
+    line-height: 1;
+}
+
+.type-list-item .type-delete-btn:hover {
+    opacity: 1;
+    background: rgba(248,113,113,0.15);
+}
+
+.type-add {
+    border-top: 1px solid rgba(255,255,255,0.08);
+    padding-top: 16px;
+}
