@@ -214,11 +214,13 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
 
 請根據錄音內容，為以上每個模板欄位產生合適的文字內容。
 以 JSON 格式回傳，不要有其他文字。範例：
-{{"{placeholders[0]}": "填寫內容", "{placeholders[-1]}": "填寫內容"}}"""
-            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。"
+{{"{placeholders[0]}": "填寫內容", "{placeholders[-1]}": "填寫內容"}}
+
+請使用繁體中文（正體中文），禁止使用簡體中文。"""
+            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。請使用繁體中文（正體中文），禁止使用簡體中文。"
         else:
-            system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。"
-            user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}"
+            system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。請使用繁體中文（正體中文），禁止使用簡體中文。"
+            user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
         
         payload = json.dumps({
             "model": "minimax-m2.7",
