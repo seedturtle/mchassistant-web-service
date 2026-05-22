@@ -757,6 +757,23 @@ async def dashboard(request: Request):
         <div id="result" class="result-box"></div>
     </div>
     
+    <!-- Report Type Management Modal -->
+    <div id="typeModal" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>📋 管理報告類型</h3>
+                <button id="closeModalBtn" class="modal-close">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="type-list" id="typeList"></div>
+                <div class="type-add">
+                    <input type="text" id="newTypeName" class="input-full" placeholder="輸入新報告類型名稱..." maxlength="30">
+                    <button id="addTypeBtn" class="btn btn-secondary" style="margin-top:8px; width:100%;">＋ 新增</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <script>
     let mediaRecorder, audioChunks = [], isRecording = false;
     let SESSION_ID = '{session_id}';
@@ -1219,22 +1236,6 @@ async def dashboard(request: Request):
     }}
     loadReportTypes();
     </script>
-    <!-- Report Type Management Modal -->
-    <div id="typeModal" class="modal-overlay" style="display:none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>📋 管理報告類型</h3>
-                <button id="closeModalBtn" class="modal-close">✕</button>
-            </div>
-            <div class="modal-body">
-                <div class="type-list" id="typeList"></div>
-                <div class="type-add">
-                    <input type="text" id="newTypeName" class="input-full" placeholder="輸入新報告類型名稱..." maxlength="30">
-                    <button id="addTypeBtn" class="btn btn-secondary" style="margin-top:8px; width:100%;">＋ 新增</button>
-                </div>
-            </div>
-        </div>
-    </div>
 </body></html>"""
     return HTMLResponse(content=html)
 
