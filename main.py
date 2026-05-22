@@ -76,6 +76,13 @@ def load_report_types() -> dict:
 
 def save_report_types(data: dict):
     REPORT_TYPES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    # Sync to Google Drive for persistence across redeploys
+    if MATON_API_KEY:
+        try:
+            content = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+            _upload_binary_to_drive(content, "report_types.json", DRIVE_TEMPLATES_FOLDER_ID)
+        except Exception as e:
+            logging.warning(f"Failed to sync report_types to Drive: {e}")
 
 report_types_store = load_report_types()
 
@@ -1620,7 +1627,7 @@ DRIVE_FILES_API = "https://gateway.maton.ai/google-drive/drive/v3/files"
 def _list_drive_templates(folder_id: str) -> list:
     """List all template files (*_template.docx) in the Drive folder."""
     import urllib.request
-    query = f"'{folder_id}' in parents and name contains '_template' and trashed = false"
+    query = f"'{folder_id}' in parents and (name contains '_template' or name = 'report_types.json') and trashed = false"
     url = f"{DRIVE_FILES_API}?q={urllib.parse.quote(query)}&fields=files(id,name,mimeType,size)"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {MATON_API_KEY}"})
     try:
@@ -1658,12 +1665,35 @@ def _sync_templates_from_drive():
         return
     
     synced = 0
+    sync_types = False
     for f in files:
         name = f.get("name", "")
         file_id = f.get("id", "")
-        if not name.endswith("_template.docx") or not file_id:
+        if not file_id:
             continue
-        # Extract report type: "swallow_template.docx" → "swallow"
+        
+        # Sync report_types.json (report type definitions)
+        if name == "report_types.json":
+            data = _download_drive_file(file_id)
+            if data:
+                try:
+                    drive_types = json.loads(data.decode('utf-8'))
+                    # Merge: Drive types override defaults, preserve locally-only types
+                    merged = dict(DEFAULT_REPORT_TYPES)
+                    merged.update(drive_types)
+                    merged.update(report_types_store)  # local takes precedence
+                    report_types_store.clear()
+                    report_types_store.update(merged)
+                    save_report_types(report_types_store)
+                    logging.info(f"  ✓ Synced report types from Drive ({len(drive_types)} types)")
+                    sync_types = True
+                except Exception as e:
+                    logging.warning(f"Failed to parse report_types.json from Drive: {e}")
+            continue
+        
+        # Sync template files (*_template.docx)
+        if not name.endswith("_template.docx"):
+            continue
         type_id = name.replace("_template.docx", "")
         if not type_id:
             continue
@@ -1672,13 +1702,15 @@ def _sync_templates_from_drive():
         if data is None:
             continue
         
-        # Save locally
         local_path = TEMPLATES_DIR / f"{type_id}.docx"
         local_path.write_bytes(data)
         logging.info(f"  ✓ Synced template: {name} → templates/{type_id}.docx")
         synced += 1
     
-    logging.info(f"Template sync complete: {synced} files synced")
+    if not sync_types and not synced:
+        logging.info("No templates found in Drive folder")
+    else:
+        logging.info(f"Template sync complete: {synced} files synced")
 
 
 @app.post("/api/dysphagia/upload")
