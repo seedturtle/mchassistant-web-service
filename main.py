@@ -479,7 +479,6 @@ def _process_generate(session_id: str):
         else:
             template_path = None
         
-        template_structure
         template_structure = ""
         template_usable = False
         if template_path and Path(template_path).exists():
