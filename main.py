@@ -65,13 +65,15 @@ DEFAULT_REPORT_TYPES = {
 }
 
 def load_report_types() -> dict:
+    """Load report types from local file, or seed defaults. Does NOT sync to Drive."""
     if REPORT_TYPES_FILE.exists():
         try:
             return json.loads(REPORT_TYPES_FILE.read_text())
         except Exception as e:
             logging.warning(f"Failed to load {REPORT_TYPES_FILE}: {e}")
+    # First run: seed defaults, save locally only (Drive sync happens later in lifespan)
     data = dict(DEFAULT_REPORT_TYPES)
-    save_report_types(data)
+    REPORT_TYPES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
     return data
 
 def save_report_types(data: dict):
