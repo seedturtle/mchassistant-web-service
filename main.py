@@ -41,6 +41,7 @@ MATON_API_KEY = os.getenv("MATON_API_KEY", "")
 DRIVE_UPLOAD_URL = "https://gateway.maton.ai/google-drive/upload/drive/v3/files"
 DRIVE_FOLDER_ID = "15goCYQxn8xM7R1HoLLTS-Hbv-lSge8Y2"  # 吞嚥障礙問卷篩檢報告
 DRIVE_TEMPLATES_FOLDER_ID = "1VCeYlNLRwVfp7rZnrbwwKDXNZwZcd95K"  # 報告類型模板
+DRIVE_AUTO_UPLOAD_ID = "1HRRcjWcL4r4CCw958GTgcqunysi5QhwU"  # 報告自動上傳資料夾
 GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
 REPORT_TYPES_FILE = Path("./report_types.json")
 
@@ -451,14 +452,14 @@ def _process_generate(session_id: str):
             else:
                 session["auto_email_error"] = msg
         
-        # --- Step 5: Upload to Google Drive if configured ---
-        drive_folder = session.get("drive_folder_id", "")
-        if drive_folder and session.get("generated_docx") and MATON_API_KEY:
+        # --- Step 5: Auto upload report to Google Drive ---
+        if session.get("generated_docx") and MATON_API_KEY:
+            # User can override the auto folder; otherwise use default
+            drive_folder = session.get("drive_folder_id", "") or DRIVE_AUTO_UPLOAD_ID
             session["processing_progress"]["stage"] = "drive_upload"
             try:
-                report_type_name = get_report_type_name(session.get("report_type", "general"))
-                clean_date = datetime.now().strftime('%Y%m%d')
-                filename = f"MCH_Report_{report_type_name}_{clean_date}.docx"
+                now = datetime.now()
+                filename = now.strftime('%Y%m%d_%H%M%S') + ".docx"
                 success, result = _upload_binary_to_drive(
                     session["generated_docx"],
                     filename,
@@ -777,9 +778,9 @@ async def dashboard(request: Request):
                 <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
             </div>
             <div class="email-input-group">
-                <label for="driveFolderInput">☁️ Google Drive 資料夾 ID（選填）：產生的報告自動上傳至此資料夾</label>
+                <label for="driveFolderInput">☁️ Google Drive 資料夾 ID（選填）：預設自動上傳到指定資料夾，可在此更改上傳目標</label>
                 <div style="display:flex; gap:8px;">
-                    <input type="text" id="driveFolderInput" placeholder="貼上資料夾 ID，如 1VCeYlNLRwVfp..." class="input-full" style="flex:1;">
+                    <input type="text" id="driveFolderInput" placeholder="留空則用預設資料夾" class="input-full" style="flex:1;">
                     <button id="setDriveFolderBtn" class="btn btn-secondary" style="padding:12px 20px; white-space:nowrap; border-radius:10px;">設定</button>
                 </div>
                 <div id="driveFolderStatus" class="template-status"></div>
