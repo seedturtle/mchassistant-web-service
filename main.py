@@ -807,8 +807,9 @@ async def dashboard(request: Request):
                 <li>🎤 按錄音鈕開始，再按一下停止，段落會自動列出</li>
                 <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選，每檔上限 100MB</li>
                 <li>🔄 錄音與上傳的音檔會累積在列表中，可混合使用</li>
-                <li>⚡ 按下「即時處理」在頁面上觀看進度，完成後手動下載或寄送</li>
-                <li>📧 按下「背景處理並寄送」需先輸入 Email，完成後自動寄送到信箱，可關閉網頁</li>
+                <li>⚡ 按下「處理」即可開始，完成後自動上傳 Google Drive</li>
+                <li>📧 填寫 Email → 完成後自動寄送到信箱，可關閉網頁</li>
+                <li>📥 未關頁面 → 完成後可手動下載或寄送</li>
                 <li>📥 處理完成後也可手動下載或按「手動寄送」</li>
                 <li>📄 可上傳 Word 模板（{{content}}、{{date}}、{{report_type}}），AI 內容自動填入</li>
             </ul>
@@ -868,19 +869,10 @@ async def dashboard(request: Request):
         
         <div class="actions">
             <div class="email-input-group">
-                <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
-                <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
+                <label for="emailInput">📧 Email（選填）：填寫後處理完成自動寄送報告，可關閉網頁</label>
+                <input type="email" id="emailInput" placeholder="留空則僅上傳 Drive + 頁面下載" class="input-full">
             </div>
-            <div class="email-input-group">
-                <label for="driveFolderInput">☁️ Google Drive 資料夾 ID（選填）：預設自動上傳到指定資料夾，可在此更改上傳目標</label>
-                <div style="display:flex; gap:8px;">
-                    <input type="text" id="driveFolderInput" placeholder="留空則用預設資料夾" class="input-full" style="flex:1;">
-                    <button id="setDriveFolderBtn" class="btn btn-secondary" style="padding:12px 20px; white-space:nowrap; border-radius:10px;">設定</button>
-                </div>
-                <div id="driveFolderStatus" class="template-status"></div>
-            </div>
-            <button class="btn btn-email-mode" id="bgEmailBtn">📧 背景處理並寄送</button>
-            <button class="btn btn-generate" id="generateBtn">⚡ 即時處理</button>
+            <button class="btn btn-generate" id="processBtn" style="font-size:18px; padding:16px 32px;">⚡ 處理</button>
             <button class="btn btn-download" id="downloadBtn" disabled>📥 下載報告</button>
             <button class="btn btn-email" id="emailBtn" disabled>📧 手動寄送</button>
         </div>
@@ -948,8 +940,7 @@ async def dashboard(request: Request):
         document.getElementById('fileInput').disabled = disabled;
         document.getElementById('emailInput').disabled = disabled;
         document.getElementById('templateFile').disabled = disabled;
-        document.getElementById('bgEmailBtn').disabled = disabled;
-        document.getElementById('generateBtn').disabled = disabled;
+        document.getElementById('processBtn').disabled = disabled;
     }}
 
     // Poll generation status
@@ -1124,35 +1115,26 @@ async def dashboard(request: Request):
     }}
 
     // ========== Generate Report ==========
-    function startProcessing(mode) {{
+    function startProcessing() {{
         document.getElementById('processingArea').style.display = 'block';
         document.getElementById('genProgressFill').style.width = '2%';
         document.getElementById('genProgressText').textContent = '啟動中...';
         document.getElementById('genResult').innerHTML = '';
         document.getElementById('genSegments').innerHTML = '';
         
-        document.getElementById('bgEmailBtn').textContent = '⏳ 處理中...';
-        document.getElementById('generateBtn').textContent = '⏳ 處理中...';
-        
         genPollTimer = setInterval(pollGenerateStatus, 3000);
-        
-        if (mode === 'bg') {{
-            document.getElementById('genProgressText').textContent = '📧 背景處理中，完成後將自動寄送至信箱（可關閉此頁）';
-        }} else {{
-            document.getElementById('genProgressText').textContent = '⚡ 即時處理中，請稍候...';
-        }}
+        document.getElementById('genProgressText').textContent = '⚡ 處理中，完成後自動上傳 Google Drive...';
     }}
 
     function stopProcessing() {{
         if (genPollTimer) {{ clearInterval(genPollTimer); genPollTimer = null; }}
         isProcessing = false;
         disableInputsDuringProcessing(false);
-        document.getElementById('bgEmailBtn').textContent = '📧 背景處理並寄送';
-        document.getElementById('generateBtn').textContent = '⚡ 即時處理';
+        document.getElementById('processBtn').textContent = '⚡ 處理';
     }}
 
-    // ========== 背景處理並寄送 ==========
-    document.getElementById('bgEmailBtn').addEventListener('click', async function() {{
+    // ========== 單一處理按鈕 ==========
+    document.getElementById('processBtn').addEventListener('click', async function() {{
         if (isProcessing) return;
         await refreshFileList();
         const listEl = document.getElementById('audioFileList');
@@ -1161,60 +1143,25 @@ async def dashboard(request: Request):
         }}
         
         const email = document.getElementById('emailInput').value.trim();
-        if (!email) {{
-            alert('請先輸入 Email 再使用背景處理並寄送');
-            document.getElementById('emailInput').focus();
-            return;
-        }}
         
-        // Save email to server first by doing a dummy upload with just the email
-        // Actually, the upload endpoint also accepts email. Let's set it via a simple API call
-        // Use upload with empty files just to set the email... OR we can just pass it in the generate request
-        
-        // Simpler: set email by making a dummy API call
-        // The email is stored on the upload endpoint. Let me just set it.
-        // Actually, the /generate endpoint doesn't accept email. Let me store it directly.
-        const setRes = await fetch('/api/sessions/' + SESSION_ID + '/set-email', {{
-            method:'POST', headers:{{'Content-Type':'application/json'}},
-            body:JSON.stringify({{email: email}})
-        }});
-        const setData = await setRes.json();
-        if (!setData.success) {{
-            alert('設定 Email 失敗'); return;
-        }}
-        
-        isProcessing = true;
-        disableInputsDuringProcessing(true);
-        startProcessing('bg');
-        
-        try {{
-            const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {{
+        // If email is provided, save it for background sending
+        if (email) {{
+            const setRes = await fetch('/api/sessions/' + SESSION_ID + '/set-email', {{
                 method:'POST', headers:{{'Content-Type':'application/json'}},
-                body:JSON.stringify({{report_type: document.getElementById('reportType').value}})
+                body:JSON.stringify({{email: email}})
             }});
-            const data = await res.json();
-            if (!data.success) {{
-                document.getElementById('genResult').innerHTML = '<div class="error">啟動失敗：' + escapeHtml(data.error) + '</div>';
-                stopProcessing();
+            const setData = await setRes.json();
+            if (!setData.success) {{
+                alert('設定 Email 失敗'); return;
             }}
-        }} catch(e) {{
-            document.getElementById('genResult').innerHTML = '<div class="error">錯誤：' + escapeHtml(e.message) + '</div>';
-            stopProcessing();
-        }}
-    }});
-
-    // ========== 即時處理 ==========
-    document.getElementById('generateBtn').addEventListener('click', async function() {{
-        if (isProcessing) return;
-        await refreshFileList();
-        const listEl = document.getElementById('audioFileList');
-        if (!listEl || listEl.textContent.includes('尚無音檔')) {{
-            alert('請先錄音或上傳音檔'); return;
+            document.getElementById('genProgressText').textContent = '📧 處理中（含 Email 寄送 + Drive 上傳），可關閉網頁...';
+        }} else {{
+            document.getElementById('genProgressText').textContent = '⚡ 處理中（Drive 上傳中），請稍候...';
         }}
         
         isProcessing = true;
         disableInputsDuringProcessing(true);
-        startProcessing('online');
+        startProcessing();
         
         try {{
             const res = await fetch('/api/sessions/' + SESSION_ID + '/generate', {{
@@ -1240,8 +1187,7 @@ async def dashboard(request: Request):
         if (data.success) {{
             document.getElementById('downloadBtn').disabled = true;
             document.getElementById('emailBtn').disabled = true;
-            document.getElementById('bgEmailBtn').textContent = '📧 背景處理並寄送';
-            document.getElementById('generateBtn').textContent = '⚡ 即時處理';
+            document.getElementById('processBtn').textContent = '⚡ 處理';
             document.getElementById('result').innerHTML = '';
             document.getElementById('genResult').innerHTML = '';
             document.getElementById('processingArea').style.display = 'none';
