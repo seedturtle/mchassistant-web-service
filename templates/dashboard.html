@@ -36,9 +36,11 @@
         
         <div class="card">
             <h3>📄 Word 模板</h3>
-            <p class="hint">上傳 Word 模板（.docx），使用 {'{' + '{'}content{'}' + '}'}、{'{' + '{'}date{'}' + '}'}、{'{' + '{'}report_type{'}' + '}'} 作為佔位符</p>
+            <p class="hint">上傳 .docx 模板，使用 {'{' + '{'}content{'}' + '}'}、{'{' + '{'}date{'}' + '}'}、{'{' + '{'}report_type{'}' + '}'} 作為佔位符。</p>
+            <p class="hint" style="font-size:12px; color:#4ade80;">📎 模板會依所選報告類型儲存，並同步上傳 Google Drive</p>
             <input type="file" id="templateFile" accept=".docx" class="file-input">
             <div id="templateStatus" class="template-status"></div>
+            <div id="templateTypeStatus" class="template-status" style="margin-top:8px;"></div>
         </div>
         
         <div class="card recorder-card">
@@ -110,6 +112,7 @@
             const formData = new FormData();
             formData.append('file', file);
             formData.append('session_id', SESSION_ID);
+            formData.append('report_type', reportType ? reportType.value : 'template');
             
             try {
                 const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {
@@ -119,7 +122,11 @@
                 const data = await res.json();
                 if (data.success) {
                     hasTemplate = true;
-                    templateStatus.innerHTML = '<span class="success">✓ 已上傳：' + file.name + '</span>';
+                    const typeName = reportType.options[reportType.selectedIndex]?.textContent || '';
+                    templateStatus.innerHTML = '<span class="success">✓ 已上傳：' + file.name + '（' + typeName + '）</span>';
+                    if (data.drive_status) {
+                        templateStatus.innerHTML += '<br><span style="font-size:12px; color:#4ade80;">' + data.drive_status + '</span>';
+                    }
                     checkGenerateReady();
                 } else {
                     templateStatus.innerHTML = '<span class="error">上傳失敗：' + data.error + '</span>';
@@ -272,28 +279,36 @@
     
     async function loadReportTypes() {
         try {
-            const res = await fetch('/api/report-types');
-            const data = await res.json();
+            const [typesRes, tmplRes] = await Promise.all([
+                fetch('/api/report-types'),
+                fetch('/api/sessions/' + SESSION_ID + '/template')
+            ]);
+            const typesData = await typesRes.json();
+            const tmplData = await tmplRes.json();
+            const templates = tmplData.templates || {};
             
             reportType.innerHTML = '';
-            data.types.forEach(t => {
+            typesData.types.forEach(t => {
                 const opt = document.createElement('option');
                 opt.value = t.id;
-                opt.textContent = t.name;
+                const hasTmpl = templates[t.id] ? ' 📋' : '';
+                opt.textContent = t.name + hasTmpl;
                 reportType.appendChild(opt);
             });
             
-            renderTypeList(data.types);
+            renderTypeList(typesData.types, templates);
         } catch (e) {
             console.error('Failed to load report types:', e);
         }
     }
     
-    function renderTypeList(types) {
+    function renderTypeList(types, templates) {
+        templates = templates || {};
         typeList.innerHTML = types.map(t => {
             const isDefault = ['general','medical','meeting','swallow','ent'].includes(t.id);
+            const hasTmpl = templates[t.id] ? ' 📋' : '';
             return '<div class="type-list-item">' +
-                '<span class="type-name">' + escapeHtml(t.name) + '</span>' +
+                '<span class="type-name">' + escapeHtml(t.name) + hasTmpl + '</span>' +
                 (isDefault ? '<span class="type-badge">預設</span>' : '<button class="type-delete-btn" data-id="' + t.id + '" title="刪除">✕</button>') +
             '</div>';
         }).join('');

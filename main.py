@@ -39,6 +39,7 @@ RECORDING_DIR.mkdir(exist_ok=True)
 MATON_API_KEY = os.getenv("MATON_API_KEY", "")
 DRIVE_UPLOAD_URL = "https://gateway.maton.ai/google-drive/upload/drive/v3/files"
 DRIVE_FOLDER_ID = "15goCYQxn8xM7R1HoLLTS-Hbv-lSge8Y2"  # 吞嚥障礙問卷篩檢報告
+DRIVE_TEMPLATES_FOLDER_ID = "1VCeYlNLRwVfp7rZnrbwwKDXNZwZcd95K"  # 報告類型模板
 GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages/send"
 REPORT_TYPES_FILE = Path("./report_types.json")
 
@@ -396,10 +397,19 @@ def _process_generate(session_id: str):
         full_text = "\n\n".join([f"【段落{i+1}】\n{seg['transcription']}" for i, seg in enumerate(session["segments"])])
         report_type = session.get("report_type", "general")
         
-        template_path = str(TEMPLATES_DIR / "template.docx")
+        # Use type-specific template, fallback to generic
+        type_template = TEMPLATES_DIR / f"{report_type}.docx"
+        generic_template = TEMPLATES_DIR / "template.docx"
+        if type_template.exists():
+            template_path = str(type_template)
+        elif generic_template.exists():
+            template_path = str(generic_template)
+        else:
+            template_path = None
+        
         template_fields = []
         template_usable = False
-        if Path(template_path).exists():
+        if template_path and Path(template_path).exists():
             try:
                 template_fields = extract_placeholders(template_path)
                 template_usable = True
@@ -691,7 +701,9 @@ async def dashboard(request: Request):
         <div class="card">
             <h3>📄 Word 模板（選填）</h3>
             <p class="hint">使用 {{content}}、{{date}}、{{report_type}} 作為佔位符</p>
+            <p class="hint" style="font-size:12px; color:#4ade80;">📎 模板會依所選報告類型儲存，並同步上傳 Google Drive</p>
             <div id="templateStatus" class="template-status"></div>
+            <div id="templateTypeStatus" class="template-status" style="margin-top:8px;"></div>
             <input type="file" id="templateFile" accept=".docx" class="file-input">
         </div>
         
@@ -851,12 +863,20 @@ async def dashboard(request: Request):
     document.getElementById('templateFile').addEventListener('change', async () => {{
         const file = document.getElementById('templateFile').files[0];
         if (!file) return;
-        const fd = new FormData(); fd.append('file', file); fd.append('session_id', SESSION_ID);
+        const rt = document.getElementById('reportType');
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('session_id', SESSION_ID);
+        fd.append('report_type', rt ? rt.value : 'template');
         const res = await fetch('/api/sessions/' + SESSION_ID + '/template', {{method:'POST', body:fd}});
         const data = await res.json();
+        const typeName = rt && rt.options[rt.selectedIndex] ? rt.options[rt.selectedIndex].textContent : '';
         document.getElementById('templateStatus').innerHTML = data.success 
-            ? '<span class="success">✓ 已儲存：' + data.filename + '</span>' 
+            ? '<span class="success">✓ 已上傳：' + data.filename + '（' + typeName + '）</span>' 
             : '<span class="error">上傳失敗</span>';
+        if (data.success && data.drive_status) {{
+            document.getElementById('templateStatus').innerHTML += '<br><span style="font-size:12px; color:#4ade80;">' + data.drive_status + '</span>';
+        }}
     }});
 
     // ========== Recording ==========
@@ -1115,26 +1135,34 @@ async def dashboard(request: Request):
     
     async function loadReportTypes() {{
         try {{
-            const res = await fetch('/api/report-types');
-            const data = await res.json();
+            const [typesRes, tmplRes] = await Promise.all([
+                fetch('/api/report-types'),
+                fetch('/api/sessions/' + SESSION_ID + '/template')
+            ]);
+            const typesData = await typesRes.json();
+            const tmplData = await tmplRes.json();
+            const templates = tmplData.templates || {{}};
             reportType.innerHTML = '';
-            data.types.forEach(t => {{
+            typesData.types.forEach(t => {{
                 const opt = document.createElement('option');
                 opt.value = t.id;
-                opt.textContent = t.name;
+                const hasTmpl = templates[t.id] ? ' 📋' : '';
+                opt.textContent = t.name + hasTmpl;
                 reportType.appendChild(opt);
             }});
-            renderTypeList(data.types);
+            renderTypeList(typesData.types, templates);
         }} catch(e) {{
             console.error('Failed to load report types:', e);
         }}
     }}
     
-    function renderTypeList(types) {{
+    function renderTypeList(types, templates) {{
+        templates = templates || {{}};
         typeList.innerHTML = types.map(t => {{
             const isDefault = ['general','medical','meeting','swallow','ent'].includes(t.id);
+            const hasTmpl = templates[t.id] ? ' 📋' : '';
             return '<div class="type-list-item">' +
-                '<span class="type-name">' + escapeHtml(t.name) + '</span>' +
+                '<span class="type-name">' + escapeHtml(t.name) + hasTmpl + '</span>' +
                 (isDefault ? '<span class="type-badge">預設</span>' : '<button class="type-delete-btn" data-id="' + t.id + '" title="刪除">✕</button>') +
             '</div>';
         }}).join('');
@@ -1243,18 +1271,41 @@ async def set_email(session_id: str, request: Request):
 async def get_template_status(session_id: str, request: Request):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    return {"exists": (TEMPLATES_DIR / "template.docx").exists()}
+    # Check which report types have templates
+    templates = {}
+    for f in TEMPLATES_DIR.glob("*.docx"):
+        type_id = f.stem  # filename without .docx
+        if type_id == "template":
+            continue  # skip generic fallback
+        templates[type_id] = True
+    return {"exists": (TEMPLATES_DIR / "template.docx").exists(), "templates": templates}
 
 @app.post("/api/sessions/{session_id}/template")
-async def upload_template(session_id: str, request: Request, file: UploadFile = File(...)):
+async def upload_template(session_id: str, request: Request, file: UploadFile = File(...), report_type: str = Form("template")):
     if not validate_session(request) or get_session_id(request) != session_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not file.filename.endswith('.docx'):
         raise HTTPException(status_code=400, detail="Only .docx files are accepted")
     content = await file.read()
+    
+    # Save locally per report type
+    local_path = TEMPLATES_DIR / f"{report_type}.docx"
+    with open(local_path, "wb") as f:
+        f.write(content)
+    
+    # Also save as generic fallback
     with open(TEMPLATES_DIR / "template.docx", "wb") as f:
         f.write(content)
-    return {"success": True, "filename": file.filename}
+    
+    # Upload to Google Drive templates folder
+    if MATON_API_KEY:
+        drive_filename = f"{report_type}_template.docx"
+        success, result = _upload_binary_to_drive(content, drive_filename, DRIVE_TEMPLATES_FOLDER_ID)
+        drive_status = "✓ 已同步到雲端" if success else f"⚠️ 雲端同步失敗：{result}"
+    else:
+        drive_status = "⚠️ 未設定 Maton API，僅儲存本地"
+    
+    return {"success": True, "filename": file.filename, "report_type": report_type, "drive_status": drive_status}
 
 @app.post("/api/auth/login")
 async def login(request: Request):
@@ -1416,6 +1467,52 @@ def _upload_to_drive(content: str, filename: str) -> tuple:
         return False, f"檔案驗證失敗：{str(e)}"
 
     return True, file_id
+
+
+def _upload_binary_to_drive(file_bytes: bytes, filename: str, folder_id: str = None) -> tuple:
+    """Upload binary file (e.g. .docx) to Google Drive via Maton API using multipart upload."""
+    import urllib.request
+    
+    target_folder = folder_id or DRIVE_FOLDER_ID
+    boundary = "----MCHBoundary" + uuid.uuid4().hex[:16]
+    
+    # Metadata JSON part
+    meta_part = json.dumps({
+        "name": filename,
+        "parents": [target_folder]
+    })
+    
+    # Build multipart body
+    body_parts = []
+    body_parts.append(f"--{boundary}\r\n".encode())
+    body_parts.append(b"Content-Type: application/json; charset=UTF-8\r\n\r\n")
+    body_parts.append(meta_part.encode("utf-8"))
+    body_parts.append(f"\r\n--{boundary}\r\n".encode())
+    body_parts.append(b"Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n")
+    body_parts.append(b"Content-Transfer-Encoding: binary\r\n\r\n")
+    body_parts.append(file_bytes)
+    body_parts.append(f"\r\n--{boundary}--\r\n".encode())
+    
+    body = b"".join(body_parts)
+    
+    req = urllib.request.Request(
+        DRIVE_UPLOAD_URL + "?uploadType=multipart",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {MATON_API_KEY}",
+            "Content-Type": f"multipart/related; boundary={boundary}",
+            "Content-Length": str(len(body))
+        },
+        method="POST"
+    )
+    
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        result = json.loads(resp.read())
+        file_id = result.get("id", "unknown")
+        return True, file_id
+    except Exception as e:
+        return False, f"模板上傳失敗：{str(e)}"
 
 
 @app.post("/api/dysphagia/upload")
