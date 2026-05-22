@@ -517,12 +517,23 @@ def _process_generate(session_id: str):
         else:
             summarized_text = full_text
         
-        # --- Step 3: Generate Word ---
+        # --- Step 3: Generate Word (always produce a .docx) ---
         session["processing_progress"]["stage"] = "generating"
         if template_usable:
             docx_bytes = fill_template(template_path, session["segments"], report_type,
                                        summarized_text=summarized_text, fields_dict=fields_dict)
-            session["generated_docx"] = docx_bytes
+        else:
+            # No template → produce a simple Word with transcribed text
+            simple_doc = Document()
+            report_date = datetime.now().strftime('%Y年%m月%d日')
+            type_name = get_report_type_name(report_type)
+            simple_doc.add_heading(f"{type_name} - {report_date}", 0)
+            for seg in session["segments"]:
+                simple_doc.add_paragraph(seg["transcription"])
+            buf = io.BytesIO()
+            simple_doc.save(buf)
+            docx_bytes = buf.getvalue()
+        session["generated_docx"] = docx_bytes
         
         # --- Step 4: Send email if configured ---
         target_email = session.get("auto_email", "")
