@@ -199,11 +199,9 @@ def transcribe_audio(audio_bytes: bytes, file_ext: str = ".webm") -> str:
         logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
-def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None, template_structure: str = None) -> any:
+def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None, template_structure: str = None) -> str:
     logging.info(f"[summarize_with_hermes] report_type={report_type}, text_length={len(transcribed_text)}")
     if not MINIMAX_API_KEY:
-        if placeholders:
-            return {p: transcribed_text for p in placeholders}
         return transcribed_text
     
     try:
@@ -212,36 +210,27 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
         
         type_name = report_types_store.get(report_type, report_type)
         
-        if placeholders:
-            fields_str = "、".join(placeholders)
-            # Build field descriptions with section context when available
-            if field_context:
-                field_desc = "\n".join([f"- {p}（{field_context.get(p, p)}）" for p in placeholders])
-            else:
-                field_desc = fields_str
-            
-            # Build prompt with full template structure
-            if template_structure:
-                template_block = f"""
-===== 模板完整結構（章節標題與順序請完全保留） =====
-{template_structure}"""
-            else:
-                template_block = ""
-            
-            user_prompt = f"""報告類型：{type_name}{template_block}
+        if template_structure:
+            system_prompt = "你是一位資深醫療報告撰寫者。根據錄音內容與模板結構參考，產出一份完整的正式報告。報告中請自行撰寫適當的章節標題與內容，不要複製模板中的文字。只輸出報告本文，不要有 JSON 或其他格式。使用繁體中文。"
+            user_prompt = f"""報告類型：{type_name}
+
+請參考以下模板結構（僅供了解報告應包含哪些項目，請勿複製模板文字到輸出中）：
+
+{template_structure}
 
 ===== 錄音內容 =====
 {transcribed_text}
 
-填寫規則（嚴格遵守）：
-1. 以上模板中的 {{...}} 欄位，根據錄音內容填入正式文字
-2. ⚠️ JSON value 只填「純內容」，不可包含任何章節標題、冒號、或模板文字
-   ✅ {"{placeholders[0]}": "純內容"}   ❌ {"{placeholders[0]}": "主訴：純內容"}   ❌ {"{placeholders[0]}": "**主訴**：純內容"}
-3. 章節標題已在模板中，你的輸出請勿重複
-4. 輸出純 JSON，key=欄位名稱，value=純內容，無其他文字
+請根據以上錄音內容，產出一份完整的正式醫療報告。報告應包含：
+1. 適合的標題
+2. 依內容整理出合適的章節（請自行撰寫章節標題）
+3. 各章節的詳細內容
 
-請使用繁體中文（正體中文），禁止使用簡體中文。"""
-            system_prompt = "你只輸出純 JSON。模板已包含所有章節標題，你的 JSON value 中嚴禁出現任何章節標題、冒號、模板文字。只輸出欄位對應的純內容。繁體中文。"
+⚠️ 重要：報告中請勿出現模板中的章節標題或任何模板文字。
+請自行撰寫所有內容，僅使用錄音內容中的資訊。
+
+請使用繁體中文（正體中文），禁止使用簡體中文。
+直接輸出報告本文即可，不要有 JSON 或程式碼格式。"""
         else:
             system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。請使用繁體中文（正體中文），禁止使用簡體中文。"
             user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
@@ -317,6 +306,8 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
                 if placeholder in new_text:
                     new_text = new_text.replace(placeholder, str(value))
                     any_placeholder_found = True
+        # Strip any remaining unreplaced {{...}} (template references)
+        new_text = re.sub(r'\{\{.*?\}\}', '', new_text)
         if new_text != full_para_text:
             for i, run in enumerate(para.runs):
                 if i == 0:
@@ -487,28 +478,24 @@ def _process_generate(session_id: str):
         else:
             template_path = None
         
-        template_fields = []
-        template_context = {}
+        template_structure
         template_structure = ""
         template_usable = False
         if template_path and Path(template_path).exists():
             try:
-                template_fields = extract_placeholders(template_path)
-                template_context = extract_placeholder_context(template_path)
                 template_structure = extract_template_structure(template_path)
                 template_usable = True
             except Exception:
                 pass
         
-        fields_dict = None
         summarized_text = None
         
         if MINIMAX_API_KEY:
-            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None, field_context=template_context, template_structure=template_structure if template_fields else None)
-            if template_fields:
-                fields_dict = result
-            else:
-                summarized_text = result
+            # Template is ONLY for AI structural context — AI generates a complete report
+            summarized_text = summarize_with_hermes(
+                full_text, report_type,
+                template_structure=template_structure if template_usable else None
+            )
         else:
             summarized_text = full_text
         
@@ -516,7 +503,7 @@ def _process_generate(session_id: str):
         session["processing_progress"]["stage"] = "generating"
         if template_usable:
             docx_bytes = fill_template(template_path, session["segments"], report_type,
-                                       summarized_text=summarized_text, fields_dict=fields_dict)
+                                       summarized_text=summarized_text)
         else:
             # No template → produce a simple Word with transcribed text
             simple_doc = Document()
