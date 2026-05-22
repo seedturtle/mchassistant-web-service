@@ -221,37 +221,27 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
                 field_desc = fields_str
             
             # Build prompt with full template structure
-            template_section = ""
             if template_structure:
-                template_section = f"""
-
-===== 模板完整結構（請嚴格遵守此綱要） =====
-{template_structure}
-
-⚠️ 重要：
-- 模板中的章節標題（如「**主訴**：」、「**病史**：」等）請完整保留，不得增刪修改
-- {{...}} 欄位只需填入「純內容」，不可重複章節標題
-- 例：模板有「主訴：{{cc}}」→ cc 只填「頭痛三天」，不可填「主訴：頭痛三天」
-- 輸出 JSON 的 key 就是欄位名稱，value 是純內容（不含章節標題）
-- 章節順序與模板完全一致"""
+                template_block = f"""
+===== 模板完整結構（章節標題與順序請完全保留） =====
+{template_structure}"""
+            else:
+                template_block = ""
             
-            user_prompt = f"""報告類型：{type_name}
-
-===== 模板結構 =====
-{template_structure}
+            user_prompt = f"""報告類型：{type_name}{template_block}
 
 ===== 錄音內容 =====
 {transcribed_text}
 
-指令：
-1. 以上模板結構中的 {{...}} 欄位，請根據錄音內容填入適當的正式文字
-2. 模板的章節標題、順序、格式請完全保留，不可增刪
-3. 每個 {{...}} 欄位只填入「純內容」，不可重複章節標題
-4. 以 JSON 回傳，key=欄位名稱，value=純內容
-範例：{{"{placeholders[0]}": "純內容", "{placeholders[-1]}": "純內容"}}
+填寫規則（嚴格遵守）：
+1. 以上模板中的 {{...}} 欄位，根據錄音內容填入正式文字
+2. ⚠️ JSON value 只填「純內容」，不可包含任何章節標題、冒號、或模板文字
+   ✅ {"{placeholders[0]}": "純內容"}   ❌ {"{placeholders[0]}": "主訴：純內容"}   ❌ {"{placeholders[0]}": "**主訴**：純內容"}
+3. 章節標題已在模板中，你的輸出請勿重複
+4. 輸出純 JSON，key=欄位名稱，value=純內容，無其他文字
 
 請使用繁體中文（正體中文），禁止使用簡體中文。"""
-            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON。模板綱要已包含所有章節標題，{{...}} 中只需填入純內容，不可重複標題。請使用繁體中文（正體中文），禁止使用簡體中文。"
+            system_prompt = "你只輸出純 JSON。模板已包含所有章節標題，你的 JSON value 中嚴禁出現任何章節標題、冒號、模板文字。只輸出欄位對應的純內容。繁體中文。"
         else:
             system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。請使用繁體中文（正體中文），禁止使用簡體中文。"
             user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
@@ -436,7 +426,7 @@ def _send_email_sync(session: dict, to_email: str) -> tuple:
             encoders.encode_base64(part)
             part.add_header('Content-Disposition', f'attachment; filename="MCH_{report_type_name}_{clean_date}.docx"')
             msg.attach(part)
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip('=')
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         data = json.dumps({"raw": raw}).encode()
         gmail_req = urllib.request.Request(GMAIL_GATEWAY, data=data, method='POST')
         gmail_req.add_header('Authorization', f'Bearer {MATON_API_KEY}')
