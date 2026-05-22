@@ -11,6 +11,7 @@ import logging
 import base64
 import tempfile
 import json
+import urllib.parse
 from datetime import datetime
 from typing import Optional, List
 from pathlib import Path
@@ -105,6 +106,8 @@ class DysphagiaUploadRequest(BaseModel):
 
 async def lifespan(app: FastAPI):
     logging.info("MCH Assistant Web Service 啟動中...")
+    logging.info("正在同步 Google Drive 模板...")
+    _sync_templates_from_drive()
     yield
     logging.info("MCH Assistant Web Service 關閉中...")
 
@@ -1515,6 +1518,73 @@ def _upload_binary_to_drive(file_bytes: bytes, filename: str, folder_id: str = N
         return False, f"模板上傳失敗：{str(e)}"
 
 
+DRIVE_FILES_API = "https://gateway.maton.ai/google-drive/drive/v3/files"
+
+
+def _list_drive_templates(folder_id: str) -> list:
+    """List all template files (*_template.docx) in the Drive folder."""
+    import urllib.request
+    query = f"'{folder_id}' in parents and name contains '_template' and trashed = false"
+    url = f"{DRIVE_FILES_API}?q={urllib.parse.quote(query)}&fields=files(id,name,mimeType,size)"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {MATON_API_KEY}"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = json.loads(resp.read())
+        return data.get("files", [])
+    except Exception as e:
+        logging.warning(f"Drive list error: {e}")
+        return []
+
+
+def _download_drive_file(file_id: str) -> Optional[bytes]:
+    """Download a file from Google Drive by ID."""
+    import urllib.request
+    url = f"{DRIVE_FILES_API}/{file_id}?alt=media"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {MATON_API_KEY}"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        return resp.read()
+    except Exception as e:
+        logging.warning(f"Drive download error (file {file_id}): {e}")
+        return None
+
+
+def _sync_templates_from_drive():
+    """Sync templates from Google Drive to local templates directory."""
+    if not MATON_API_KEY:
+        logging.warning("Maton API Key not configured, skipping Drive template sync")
+        return
+    
+    logging.info("Syncing templates from Google Drive...")
+    files = _list_drive_templates(DRIVE_TEMPLATES_FOLDER_ID)
+    if not files:
+        logging.info("No templates found in Drive folder")
+        return
+    
+    synced = 0
+    for f in files:
+        name = f.get("name", "")
+        file_id = f.get("id", "")
+        if not name.endswith("_template.docx") or not file_id:
+            continue
+        # Extract report type: "swallow_template.docx" → "swallow"
+        type_id = name.replace("_template.docx", "")
+        if not type_id:
+            continue
+        
+        data = _download_drive_file(file_id)
+        if data is None:
+            continue
+        
+        # Save locally
+        local_path = TEMPLATES_DIR / f"{type_id}.docx"
+        local_path.write_bytes(data)
+        logging.info(f"  ✓ Synced template: {name} → templates/{type_id}.docx")
+        synced += 1
+    
+    logging.info(f"Template sync complete: {synced} files synced")
+
+
 @app.post("/api/dysphagia/upload")
 async def dysphagia_upload(req: DysphagiaUploadRequest, request: Request):
     """Receive dysphagia screening report and upload to Google Drive."""
@@ -1698,6 +1768,21 @@ async def api_delete_report_type(type_id: str):
     del report_types_store[type_id]
     save_report_types(report_types_store)
     return {"success": True}
+
+
+@app.post("/api/report-types/sync-templates")
+async def api_sync_templates():
+    """手動觸發從 Google Drive 同步模板"""
+    try:
+        _sync_templates_from_drive()
+        synced = []
+        for f in TEMPLATES_DIR.glob("*.docx"):
+            if f.stem != "template":
+                synced.append(f.stem)
+        return {"success": True, "synced": synced, "count": len(synced)}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
 
 # =============================================================================
 # Run
