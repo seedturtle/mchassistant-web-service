@@ -116,8 +116,9 @@ class DysphagiaUploadRequest(BaseModel):
 
 async def lifespan(app: FastAPI):
     logging.info("MCH Assistant Web Service 啟動中...")
-    logging.info("正在同步 Google Drive 模板...")
-    _sync_templates_from_drive()
+    # Run Drive sync in background — don't block startup
+    import threading
+    threading.Thread(target=_sync_templates_from_drive, daemon=True).start()
     yield
     logging.info("MCH Assistant Web Service 關閉中...")
 
