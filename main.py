@@ -812,10 +812,10 @@ async def dashboard(request: Request):
                 <li>🎤 按錄音鈕開始，再按一下停止，段落會自動列出</li>
                 <li>📁 也可上傳音檔（MP3/WAV/M4A 等），支援拖放或多選，每檔上限 100MB</li>
                 <li>🔄 錄音與上傳的音檔會累積在列表中，可混合使用</li>
-                <li>⚡ 按下「處理」即可開始，完成後自動上傳 Google Drive</li>
-                <li>📧 填寫 Email → 完成後自動寄送到信箱，可關閉網頁</li>
-                <li>📥 未關頁面 → 完成後可手動下載或寄送</li>
-                <li>📥 處理完成後也可手動下載或按「手動寄送」</li>
+                <li>⚡ 按下「處理」即可開始，可關閉網頁，背景會完成所有工作</li>
+                <li>☁️ 未填 Email → 完成後自動上傳 Google Drive，頁面可關</li>
+                <li>📧 有填 Email → 完成後自動寄送到信箱 + 上傳 Drive</li>
+                <li>📥 若頁面未關 → 完成後可手動下載或寄送</li>
                 <li>📄 可上傳 Word 模板（{{content}}、{{date}}、{{report_type}}），AI 內容自動填入</li>
             </ul>
         </div>
@@ -1128,7 +1128,7 @@ async def dashboard(request: Request):
         document.getElementById('genSegments').innerHTML = '';
         
         genPollTimer = setInterval(pollGenerateStatus, 3000);
-        document.getElementById('genProgressText').textContent = '⚡ 處理中，完成後自動上傳 Google Drive...';
+        document.getElementById('genProgressText').textContent = '⚡ 背景處理中（可關閉網頁）...';
     }}
 
     function stopProcessing() {{
@@ -1161,7 +1161,7 @@ async def dashboard(request: Request):
             }}
             document.getElementById('genProgressText').textContent = '📧 處理中（含 Email 寄送 + Drive 上傳），可關閉網頁...';
         }} else {{
-            document.getElementById('genProgressText').textContent = '⚡ 處理中（Drive 上傳中），請稍候...';
+            document.getElementById('genProgressText').textContent = '☁️ 背景處理中（自動上傳 Drive），可關閉網頁...';
         }}
         
         isProcessing = true;
