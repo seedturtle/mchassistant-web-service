@@ -199,7 +199,7 @@ def transcribe_audio(audio_bytes: bytes, file_ext: str = ".webm") -> str:
         logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
-def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None) -> any:
+def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None, template_structure: str = None) -> any:
     logging.info(f"[summarize_with_hermes] report_type={report_type}, text_length={len(transcribed_text)}")
     if not MINIMAX_API_KEY:
         if placeholders:
@@ -219,21 +219,34 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
                 field_desc = "\n".join([f"- {p}（{field_context.get(p, p)}）" for p in placeholders])
             else:
                 field_desc = fields_str
+            
+            # Build prompt with full template structure
+            template_section = ""
+            if template_structure:
+                template_section = f"""
+
+===== 模板完整結構 =====
+{template_structure}
+
+請仔細閱讀以上模板結構，理解每個 {{...}} 欄位所在的章節位置與上下文，
+然後根據錄音內容為每個欄位填入適當的正式文字。"""
+            
             user_prompt = f"""報告類型：{type_name}
 
 模板欄位：
-{field_desc}
+{field_desc}{template_section}
 
-錄音內容：
+===== 錄音內容 =====
 {transcribed_text}
 
-請根據錄音內容，為以上每個模板欄位產生合適的正式文字內容。
-每個欄位的章節標題在括號中，請依標題語境填寫。
-以 JSON 格式回傳，不要有其他文字。範例：
+請根據錄音內容，為以上每個 {{...}} 模板欄位產生合適的正式文字內容。
+務必閱讀模板完整結構，理解每個欄位在文件中的位置與上下文後再填寫。
+以 JSON 格式回傳，key 為欄位名稱，value 為填寫內容。不要有其他文字。
+範例：
 {{"{placeholders[0]}": "填寫內容", "{placeholders[-1]}": "填寫內容"}}
 
 請使用繁體中文（正體中文），禁止使用簡體中文。"""
-            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。每個欄位請根據其章節標題語境填寫適當內容。請使用繁體中文（正體中文），禁止使用簡體中文。"
+            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。填寫前請先理解模板整體結構與各欄位所在的章節語境。請使用繁體中文（正體中文），禁止使用簡體中文。"
         else:
             system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。請使用繁體中文（正體中文），禁止使用簡體中文。"
             user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
@@ -372,6 +385,25 @@ def extract_placeholder_context(doc_path: str) -> dict:
                             context[ph] = ctx or ph
     return context
 
+def extract_template_structure(doc_path: str) -> str:
+    """Extract full template text with structure preserved for AI context."""
+    doc = Document(doc_path)
+    lines = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            lines.append(text)
+    for i, table in enumerate(doc.tables):
+        if i > 0:
+            lines.append("")
+        lines.append("【表格】")
+        for row in table.rows:
+            row_text = " | ".join(cell.text.strip() for cell in row.cells)
+            if row_text.strip():
+                lines.append("  " + row_text)
+    return "\n".join(lines)
+
+
 def _send_email_sync(session: dict, to_email: str) -> tuple:
     try:
         import urllib.request, urllib.error
@@ -462,11 +494,13 @@ def _process_generate(session_id: str):
         
         template_fields = []
         template_context = {}
+        template_structure = ""
         template_usable = False
         if template_path and Path(template_path).exists():
             try:
                 template_fields = extract_placeholders(template_path)
                 template_context = extract_placeholder_context(template_path)
+                template_structure = extract_template_structure(template_path)
                 template_usable = True
             except Exception:
                 pass
@@ -475,7 +509,7 @@ def _process_generate(session_id: str):
         summarized_text = None
         
         if MINIMAX_API_KEY:
-            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None, field_context=template_context)
+            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None, field_context=template_context, template_structure=template_structure if template_fields else None)
             if template_fields:
                 fields_dict = result
             else:
