@@ -160,6 +160,8 @@ def get_or_create_session() -> str:
         "auto_email_sent": False,
         "auto_email_message": None,
         "auto_email_error": None,
+        "drive_folder_id": "",
+        "drive_upload_result": None,
         "processing": False,
         "processing_done": False,
         "processing_error": None,
@@ -449,6 +451,30 @@ def _process_generate(session_id: str):
             else:
                 session["auto_email_error"] = msg
         
+        # --- Step 5: Upload to Google Drive if configured ---
+        drive_folder = session.get("drive_folder_id", "")
+        if drive_folder and session.get("generated_docx") and MATON_API_KEY:
+            session["processing_progress"]["stage"] = "drive_upload"
+            try:
+                report_type_name = get_report_type_name(session.get("report_type", "general"))
+                clean_date = datetime.now().strftime('%Y%m%d')
+                filename = f"MCH_Report_{report_type_name}_{clean_date}.docx"
+                success, result = _upload_binary_to_drive(
+                    session["generated_docx"],
+                    filename,
+                    drive_folder
+                )
+                session["drive_upload_result"] = {
+                    "success": success,
+                    "file_id": result if success else None,
+                    "error": None if success else result,
+                    "filename": filename
+                }
+            except Exception as e:
+                session["drive_upload_result"] = {
+                    "success": False, "file_id": None, "error": str(e), "filename": ""
+                }
+        
         session["processing_progress"]["stage"] = "done"
         session["processing_done"] = True
         
@@ -610,7 +636,9 @@ async def get_generate_status(session_id: str, request: Request):
         "auto_email": s.get("auto_email") or None,
         "auto_email_sent": s.get("auto_email_sent", False),
         "auto_email_message": s.get("auto_email_message"),
-        "auto_email_error": s.get("auto_email_error")
+        "auto_email_error": s.get("auto_email_error"),
+        "drive_folder_id": s.get("drive_folder_id") or None,
+        "drive_upload_result": s.get("drive_upload_result")
     }
 
 
@@ -748,11 +776,20 @@ async def dashboard(request: Request):
                 <label for="emailInput">📧 背景模式 Email（必填）：按「背景處理並寄送」時，完成後自動寄至此信箱</label>
                 <input type="email" id="emailInput" placeholder="example@mch.org.tw" class="input-full">
             </div>
+            <div class="email-input-group">
+                <label for="driveFolderInput">☁️ Google Drive 資料夾 ID（選填）：產生的報告自動上傳至此資料夾</label>
+                <div style="display:flex; gap:8px;">
+                    <input type="text" id="driveFolderInput" placeholder="貼上資料夾 ID，如 1VCeYlNLRwVfp..." class="input-full" style="flex:1;">
+                    <button id="setDriveFolderBtn" class="btn btn-secondary" style="padding:12px 20px; white-space:nowrap; border-radius:10px;">設定</button>
+                </div>
+                <div id="driveFolderStatus" class="template-status"></div>
+            </div>
             <button class="btn btn-email-mode" id="bgEmailBtn">📧 背景處理並寄送</button>
             <button class="btn btn-generate" id="generateBtn">⚡ 即時處理</button>
             <button class="btn btn-download" id="downloadBtn" disabled>📥 下載報告</button>
             <button class="btn btn-email" id="emailBtn" disabled>📧 手動寄送</button>
         </div>
+        <div id="driveResult" class="result-box" style="display:none;"></div>
         
         <div id="result" class="result-box"></div>
     </div>
@@ -844,8 +881,11 @@ async def dashboard(request: Request):
                 pct = 90;
                 stageLabel = '📄 產出 Word 報告中';
             }} else if (stage === 'emailing') {{
-                pct = 95;
+                pct = 90;
                 stageLabel = '📧 寄送 Email 中';
+            }} else if (stage === 'drive_upload') {{
+                pct = 95;
+                stageLabel = '☁️ 上傳 Google Drive 中';
             }} else if (stage === 'done') {{
                 pct = 100;
                 stageLabel = '✅ 完成';
@@ -870,6 +910,18 @@ async def dashboard(request: Request):
                         document.getElementById('genResult').innerHTML = '<div class="warning">⚠️ 已產生報告，但自動寄信失敗：' + escapeHtml(data.auto_email_error || '') + '</div>';
                     }} else {{
                         document.getElementById('genResult').innerHTML = '<div class="success">✅ 報告已產生！</div>';
+                    }}
+                    // Show Drive upload result
+                    if (data.drive_upload_result) {{
+                        const dr = data.drive_upload_result;
+                        const driveDiv = document.getElementById('driveResult');
+                        if (dr.success) {{
+                            driveDiv.style.display = 'block';
+                            driveDiv.innerHTML = '<div class="success">☁️ 報告已上傳 Google Drive：' + escapeHtml(dr.filename) + '</div>';
+                        }} else if (dr.error) {{
+                            driveDiv.style.display = 'block';
+                            driveDiv.innerHTML = '<div class="warning">⚠️ Drive 上傳失敗：' + escapeHtml(dr.error) + '</div>';
+                        }}
                     }}
                     document.getElementById('downloadBtn').disabled = false;
                     document.getElementById('emailBtn').disabled = false;
@@ -1140,6 +1192,33 @@ async def dashboard(request: Request):
         }}
     }}
 
+    // ========== Drive Folder ==========
+    const setDriveFolderBtn = document.getElementById('setDriveFolderBtn');
+    const driveFolderInput = document.getElementById('driveFolderInput');
+    const driveFolderStatus = document.getElementById('driveFolderStatus');
+    
+    if (setDriveFolderBtn) {{
+        setDriveFolderBtn.addEventListener('click', async () => {{
+            const folderId = driveFolderInput.value.trim();
+            if (!folderId) {{ driveFolderStatus.innerHTML = '<span class="error">請輸入資料夾 ID</span>'; return; }}
+            try {{
+                const res = await fetch('/api/sessions/' + SESSION_ID + '/set-drive-folder', {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{ folder_id: folderId }})
+                }});
+                const data = await res.json();
+                if (data.success) {{
+                    driveFolderStatus.innerHTML = '<span class="success">✓ Drive 資料夾已設定</span>';
+                }} else {{
+                    driveFolderStatus.innerHTML = '<span class="error">設定失敗：' + (data.error || '') + '</span>';
+                }}
+            }} catch(e) {{
+                driveFolderStatus.innerHTML = '<span class="error">錯誤：' + e.message + '</span>';
+            }}
+        }});
+    }}
+
     // ========== Init ==========
     refreshFileList();
     
@@ -1269,6 +1348,19 @@ async def set_email(session_id: str, request: Request):
     sessions[session_id]["auto_email_message"] = None
     sessions[session_id]["auto_email_error"] = None
     return {"success": True, "email": email}
+
+
+@app.post("/api/sessions/{session_id}/set-drive-folder")
+async def set_drive_folder(session_id: str, request: Request):
+    if not validate_session(request) or get_session_id(request) != session_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    data = await request.json()
+    folder_id = data.get("folder_id", "").strip()
+    sessions[session_id]["drive_folder_id"] = folder_id
+    sessions[session_id]["drive_upload_result"] = None
+    return {"success": True, "folder_id": folder_id}
 
 
 @app.get("/api/sessions/{session_id}/template")
