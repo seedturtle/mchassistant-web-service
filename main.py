@@ -199,7 +199,7 @@ def transcribe_audio(audio_bytes: bytes, file_ext: str = ".webm") -> str:
         logging.error(f"Faster Whisper transcription error: {e}")
         return f"[轉換失敗: {str(e)}]"
 
-def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None) -> any:
+def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None) -> any:
     logging.info(f"[summarize_with_hermes] report_type={report_type}, text_length={len(transcribed_text)}")
     if not MINIMAX_API_KEY:
         if placeholders:
@@ -214,19 +214,26 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
         
         if placeholders:
             fields_str = "、".join(placeholders)
+            # Build field descriptions with section context when available
+            if field_context:
+                field_desc = "\n".join([f"- {p}（{field_context.get(p, p)}）" for p in placeholders])
+            else:
+                field_desc = fields_str
             user_prompt = f"""報告類型：{type_name}
 
-模板欄位：{fields_str}
+模板欄位：
+{field_desc}
 
 錄音內容：
 {transcribed_text}
 
-請根據錄音內容，為以上每個模板欄位產生合適的文字內容。
+請根據錄音內容，為以上每個模板欄位產生合適的正式文字內容。
+每個欄位的章節標題在括號中，請依標題語境填寫。
 以 JSON 格式回傳，不要有其他文字。範例：
 {{"{placeholders[0]}": "填寫內容", "{placeholders[-1]}": "填寫內容"}}
 
 請使用繁體中文（正體中文），禁止使用簡體中文。"""
-            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。請使用繁體中文（正體中文），禁止使用簡體中文。"
+            system_prompt = "你是專業的醫療報告整理助理。你只回傳純 JSON，不附加任何說明文字。每個欄位請根據其章節標題語境填寫適當內容。請使用繁體中文（正體中文），禁止使用簡體中文。"
         else:
             system_prompt = "你是專業的醫療報告整理助理。請將下面的口語錄音整理成正式格式，直接輸出結果，不需要標記【段落】。請使用繁體中文（正體中文），禁止使用簡體中文。"
             user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
@@ -283,13 +290,15 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
     report_date = datetime.now().strftime('%Y年%m月%d日')
     report_name = get_report_type_name(report_type)
     
+    any_placeholder_found = False
+    
     def replace_paragraph_text(para):
         full_para_text = "".join(run.text for run in para.runs)
         new_text = full_para_text
-        nonlocal content_replaced
+        nonlocal any_placeholder_found
         if "{{content}}" in new_text:
             new_text = new_text.replace("{{content}}", full_text)
-            content_replaced = True
+            any_placeholder_found = True
         if "{{date}}" in new_text:
             new_text = new_text.replace("{{date}}", report_date)
         if "{{report_type}}" in new_text:
@@ -299,6 +308,7 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
                 placeholder = f"{{{{{key}}}}}"
                 if placeholder in new_text:
                     new_text = new_text.replace(placeholder, str(value))
+                    any_placeholder_found = True
         if new_text != full_para_text:
             for i, run in enumerate(para.runs):
                 if i == 0:
@@ -306,7 +316,6 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
                 else:
                     run.text = ""
     
-    content_replaced = False
     for para in doc.paragraphs:
         replace_paragraph_text(para)
     for table in doc.tables:
@@ -314,7 +323,7 @@ def fill_template(template_path: str, segments: list, report_type: str, summariz
             for cell in row.cells:
                 for para in cell.paragraphs:
                     replace_paragraph_text(para)
-    if not content_replaced and full_text:
+    if not any_placeholder_found and full_text:
         doc.add_paragraph("")
         doc.add_paragraph(full_text)
     buffer = io.BytesIO()
@@ -325,6 +334,7 @@ def get_report_type_name(report_type: str) -> str:
     return report_types_store.get(report_type, report_type)
 
 def extract_placeholders(doc_path: str) -> list:
+    """Extract placeholder names from template. Returns list of strings."""
     doc = Document(doc_path)
     placeholders = set()
     for para in doc.paragraphs:
@@ -335,6 +345,32 @@ def extract_placeholders(doc_path: str) -> list:
                 placeholders.update(re.findall(r'\{\{(.*?)\}\}', cell.text))
     auto_fill = {"date", "report_type", "content"}
     return [p for p in placeholders if p not in auto_fill]
+
+
+def extract_placeholder_context(doc_path: str) -> dict:
+    """Extract placeholder names with their section context from template.
+    Returns dict like {"cc": "主訴", "pe": "理學檢查"}"""
+    doc = Document(doc_path)
+    context = {}
+    auto_fill = {"date", "report_type", "content"}
+    for para in doc.paragraphs:
+        text = para.text
+        for m in re.finditer(r'\{\{(.*?)\}\}', text):
+            ph = m.group(1)
+            if ph not in auto_fill:
+                ctx = text[:m.start()].strip().rstrip('：:：,')
+                context[ph] = ctx or ph
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    text = para.text
+                    for m in re.finditer(r'\{\{(.*?)\}\}', text):
+                        ph = m.group(1)
+                        if ph not in auto_fill and ph not in context:
+                            ctx = text[:m.start()].strip().rstrip('：:：,')
+                            context[ph] = ctx or ph
+    return context
 
 def _send_email_sync(session: dict, to_email: str) -> tuple:
     try:
@@ -425,10 +461,12 @@ def _process_generate(session_id: str):
             template_path = None
         
         template_fields = []
+        template_context = {}
         template_usable = False
         if template_path and Path(template_path).exists():
             try:
                 template_fields = extract_placeholders(template_path)
+                template_context = extract_placeholder_context(template_path)
                 template_usable = True
             except Exception:
                 pass
@@ -437,7 +475,7 @@ def _process_generate(session_id: str):
         summarized_text = None
         
         if MINIMAX_API_KEY:
-            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None)
+            result = summarize_with_hermes(full_text, report_type, placeholders=template_fields if template_fields else None, field_context=template_context)
             if template_fields:
                 fields_dict = result
             else:
