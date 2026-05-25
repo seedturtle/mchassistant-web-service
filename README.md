@@ -6,7 +6,7 @@
 
 - 🎙️ **分段錄音**：多次錄音，每段獨立轉文字
 - 🧠 **Whisper STT**：本地部署 Faster Whisper（small 模型）
-- 🤖 **AI 彙整**：透過 MiniMax API（minimax-m2.7）將口語整理為正式報告
+- 🤖 **AI 彙整**：透過 OpenRouter API（預設 gpt-4o-mini，可透過 OPENROUTER_MODEL 環境變數自訂）將口語整理為正式報告
 - 📄 **Word 下載**：支援模板（`{{content}}`、`{{date}}`、`{{report_type}}`）
 - 📧 **Email 發送**：透過 Maton Gmail API 寄送報告
 
@@ -15,7 +15,7 @@
 ```
 用戶瀏覽器 → Zeabur → FastAPI
   → /segment    (Whisper 轉換)
-  → /generate   (MiniMax API)
+  → /generate   (OpenRouter API)
   → /download   (Word 下載)
   → /email      (Maton Gmail API)
 ```
@@ -24,7 +24,9 @@
 
 | 變數 | 說明 |
 |---|---|
-| `MINIMAX_API_KEY` | MiniMax API Key（用於 AI 彙整） |
+| `OPENROUTER_API_KEY` | OpenRouter API Key（用於 AI 彙整，相容 OpenAI 格式） |
+| `OPENROUTER_MODEL` | 自訂 AI 模型（預設 `openai/gpt-4o-mini`） |
+| `ACCESS_PASSWORD` | 登入密碼（預設 `ABC1234`，請在 Zeabur 環境變數中設定） |
 | `MATON_API_KEY` | Maton Gmail API Key（用於 Email 發送） |
 | `HF_TOKEN` | HuggingFace Token（選用，加速 Whisper 模型下載） |
 
@@ -33,7 +35,7 @@
 ```bash
 pip install -r requirements.txt
 
-export MINIMAX_API_KEY="your-minimax-api-key"
+export OPENROUTER_API_KEY="your-openrouter-api-key"
 export MATON_API_KEY="your-maton-api-key"
 
 uvicorn main:app --reload --port 8080

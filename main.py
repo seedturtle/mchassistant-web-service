@@ -48,8 +48,9 @@ GMAIL_GATEWAY = "https://gateway.maton.ai/google-mail/gmail/v1/users/me/messages
 REPORT_TYPES_FILE = Path("./report_types.json")
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-MINIMAX_API_KEY = os.getenv("MINIMAX_API_KEY", "")
-MINIMAX_API_GATEWAY = "https://api.minimax.io/v1/text/chatcompletion_v2"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_GATEWAY = os.getenv("OPENROUTER_base_URL", "").rstrip("/") or "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
 
 sessions = {}
 executor = ThreadPoolExecutor(max_workers=2)
@@ -204,7 +205,7 @@ def transcribe_audio(audio_bytes: bytes, file_ext: str = ".webm") -> str:
 
 def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders: list = None, field_context: dict = None, template_structure: str = None) -> str:
     logging.info(f"[summarize_with_hermes] report_type={report_type}, text_length={len(transcribed_text)}")
-    if not MINIMAX_API_KEY:
+    if not OPENROUTER_API_KEY:
         return transcribed_text
     
     try:
@@ -239,7 +240,7 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
             user_prompt = f"報告類型：{type_name}\n\n錄音內容：\n{transcribed_text}\n\n請使用繁體中文（正體中文），禁止使用簡體中文。"
         
         payload = json.dumps({
-            "model": "minimax-m2.7",
+            "model": OPENROUTER_MODEL,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -248,9 +249,11 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
             "max_tokens": 4000
         }).encode()
         
-        req = urllib.request.Request(MINIMAX_API_GATEWAY, data=payload, method='POST')
-        req.add_header('Authorization', f'Bearer {MINIMAX_API_KEY}')
+        req = urllib.request.Request(OPENROUTER_API_GATEWAY, data=payload, method='POST')
+        req.add_header('Authorization', f'Bearer {OPENROUTER_API_KEY}')
         req.add_header('Content-Type', 'application/json')
+        req.add_header('HTTP-Referer', 'https://mchassistant.zo.computer')
+        req.add_header('X-Title', 'MCH Assistant')
         
         with urllib.request.urlopen(req, timeout=60) as resp:
             result = json.loads(resp.read().decode())
@@ -276,7 +279,7 @@ def summarize_with_hermes(transcribed_text: str, report_type: str, placeholders:
                 return {p: f"[待補充：{p}]" for p in placeholders}
             return transcribed_text
     except Exception as e:
-        logging.error(f"MiniMax summarization error: {e}")
+        logging.error(f"OpenRouter summarization error: {e}")
         if placeholders:
             return {p: transcribed_text for p in placeholders}
         return transcribed_text
@@ -466,7 +469,7 @@ def _process_generate(session_id: str):
             })
             session["processing_progress"]["transcribed"] += 1
         
-        # --- Step 2: Summarize with MiniMax ---
+        # --- Step 2: Summarize with OpenRouter ---
         session["processing_progress"]["stage"] = "summarizing"
         full_text = "\n\n".join([f"【段落{i+1}】\n{seg['transcription']}" for i, seg in enumerate(session["segments"])])
         report_type = session.get("report_type", "general")
@@ -492,7 +495,7 @@ def _process_generate(session_id: str):
         
         summarized_text = None
         
-        if MINIMAX_API_KEY:
+        if OPENROUTER_API_KEY:
             # Template is ONLY for AI structural context — AI generates a complete report
             summarized_text = summarize_with_hermes(
                 full_text, report_type,
