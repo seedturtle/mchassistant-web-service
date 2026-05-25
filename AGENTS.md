@@ -7,7 +7,7 @@
 - 入口：`main.py`
 - 前端：目前主要由 `main.py` 的 `/dashboard` 內嵌 HTML/JS 提供；`templates/dashboard.html` 與 `static/js/app.js` 看起來像舊版/部分未使用的模板資源。
 - STT：`faster-whisper` small model，本機 CPU/int8，函式 `transcribe_audio()`。
-- 報告統整：MiniMax API (`minimax-m2.7`)，函式 `summarize_with_hermes()`。
+- 報告統整：OpenRouter API (`anthropic/claude-sonnet-4`)，函式 `summarize_with_hermes()`。
 - Word 輸出：`python-docx`，模板 placeholder 支援 `{{content}}`, `{{date}}`, `{{report_type}}` 與自訂欄位。
 - Email/Google Drive：透過 Maton gateway API；`MATON_API_KEY` 必須在 Zeabur 環境變數。
 - 部署：Dockerfile + `zeabur.json`，port 8080。
@@ -17,9 +17,13 @@
 目前瀏覽時導向 Zeabur Projects，需要登入或前端權限；可先以 GitHub repo 內容分析。
 
 ## 重要環境變數
-- `MINIMAX_API_KEY`：AI 報告統整
+- `OPENROUTER_API_KEY`：OpenRouter API 金鑰（AI 報告統整，替代 MiniMax）
+- `OPENROUTER_MODEL`：可選，預設 `anthropic/claude-sonnet-4`
+- `OPENROUTER_BASE_URL`：可選，預設 `https://openrouter.ai/api/v1/chat/completions`
 - `MATON_API_KEY`：Gmail/Google Drive gateway
+- `ACCESS_PASSWORD`：網頁登入密碼（已從 hardcode 移出，預設 `ABC1234`）
 - `HF_TOKEN`：可選，Whisper 模型下載
+- `MINIMAX_API_KEY`：向後相容，若未設定 `OPENROUTER_API_KEY` 時讀取
 
 ## 注意事項
 - 不要把密碼或 API key 寫入 repo。`ACCESS_PASSWORD` 目前硬編在 `main.py`（`ABC1234`），未來應改成環境變數。
