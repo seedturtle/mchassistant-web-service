@@ -31,7 +31,9 @@ from email.mime.text import MIMEText
 # Configuration
 # =============================================================================
 
-ACCESS_PASSWORD = "ABC1234"
+# SECURITY CHANGE: ACCESS_PASSWORD is now loaded from environment variable ACCESS_PASSWORD
+# with fallback to the old default "ABC1234" for backward compatibility.
+ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "ABC1234")
 UPLOAD_DIR = Path("./uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 RECORDING_DIR = Path("./recordings")
