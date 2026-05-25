@@ -50,7 +50,7 @@ REPORT_TYPES_FILE = Path("./report_types.json")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_API_GATEWAY = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash")
 
 sessions = {}
 executor = ThreadPoolExecutor(max_workers=2)
